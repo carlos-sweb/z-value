@@ -1,0 +1,19 @@
+.{
+    .name = .zvalue,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0xc02e202db5408f0c,
+    .description = "Reference-counted, ECMAScript-compatible tagged-union JSValue for the z-* micro-library ecosystem",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src/",
+        "README.md",
+        "README.es.md",
+    },
+    .dependencies = .{
+        .zarray = .{ .path = "../z-array" },
+        .zobject = .{ .path = "../z-object" },
+        .zregexp = .{ .path = "../zregexp" },
+    },
+}
