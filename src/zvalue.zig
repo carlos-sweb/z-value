@@ -5,6 +5,9 @@ const zarray = @import("zarray");
 const zobject = @import("zobject");
 const zregexp = @import("zregexp");
 const zstring = @import("zstring");
+const zsymbol = @import("zsymbol");
+const zmap = @import("zmap");
+const zset = @import("zset");
 
 pub const Rc = @import("rc.zig").Rc;
 pub const equality = @import("equality.zig");
@@ -14,6 +17,9 @@ const ZArray = zarray.ZArray;
 const ZObject = zobject.ZObject;
 const Regex = zregexp.Regex;
 const ZString = zstring.ZString;
+const ZSymbol = zsymbol.ZSymbol;
+const ZMap = zmap.ZMap;
+const ZSet = zset.ZSet;
 
 /// A JS value: undefined/null/boolean/number are inline (trivially copyable
 /// bits); string/array/object/regex are heap-owning and live behind a
@@ -41,6 +47,9 @@ pub const JSValue = union(enum) {
     array: *Rc(ZArray(JSValue)),
     object: *Rc(ZObject(JSValue)),
     regex: *Rc(Regex),
+    symbol: *Rc(ZSymbol),
+    map: *Rc(ZMap(JSValue, JSValue)),
+    set: *Rc(ZSet(JSValue)),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -78,9 +87,30 @@ pub const JSValue = union(enum) {
         return .{ .regex = try Rc(Regex).create(allocator, re) };
     }
 
+    /// Every call produces a brand-new, always-unique symbol — even with an
+    /// identical description, it never equals a previously created one (see
+    /// equality.zig: symbols compare by Rc box identity). Uses
+    /// ZSymbol.init() (a value, not create()'s own heap allocation) since
+    /// the Rc box itself is the symbol's one true heap allocation.
+    pub fn newSymbol(allocator: Allocator, description: ?[]const u8) !JSValue {
+        const sym = try ZSymbol.init(allocator, description);
+        return .{ .symbol = try Rc(ZSymbol).create(allocator, sym) };
+    }
+
+    pub fn newMap(allocator: Allocator) !JSValue {
+        const m = ZMap(JSValue, JSValue).init(allocator);
+        return .{ .map = try Rc(ZMap(JSValue, JSValue)).create(allocator, m) };
+    }
+
+    pub fn newSet(allocator: Allocator) !JSValue {
+        const s = ZSet(JSValue).init(allocator);
+        return .{ .set = try Rc(ZSet(JSValue)).create(allocator, s) };
+    }
+
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
-    /// typeof null === "object", not "null". Arrays/objects/regexes are all
-    /// typeof "object" too — only functions (not modeled yet) are "function".
+    /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
+    /// are all typeof "object" too — only functions (not modeled yet) are
+    /// "function". `symbol` is its own distinct typeof result.
     pub fn typeOf(self: JSValue) []const u8 {
         return switch (self) {
             .@"undefined" => "undefined",
@@ -88,8 +118,27 @@ pub const JSValue = union(enum) {
             .boolean => "boolean",
             .number => "number",
             .string => "string",
-            .array, .object, .regex => "object",
+            .symbol => "symbol",
+            .array, .object, .regex, .map, .set => "object",
         };
+    }
+
+    /// Duck-typed hook picked up by zequality's generic strictEquals/hash
+    /// machinery (see z-equality's `hasCustomEql`/`containerEquals`) so that
+    /// `ZMap(JSValue, JSValue)`/`ZSet(JSValue)` — which delegate their key
+    /// comparison to `zequality.sameValueZero(K, ...)` — work at all. Uses
+    /// SameValueZero specifically (not strictEquals) because that's the
+    /// ECMA-262 Map/Set key-comparison algorithm, and it's the only consumer
+    /// of this method today.
+    pub fn eql(a: JSValue, b: JSValue) bool {
+        return @import("equality.zig").sameValueZero(a, b);
+    }
+
+    /// Pairs with eql() above for the same duck-typing contract (equal
+    /// values must hash equally — required together or zequality raises a
+    /// compile error).
+    pub fn hash(self: JSValue) u64 {
+        return @import("equality.zig").hash(self);
     }
 
     /// Increments the refcount of the underlying box, if any (no-op for
@@ -102,6 +151,9 @@ pub const JSValue = union(enum) {
             .array => |box| _ = box.retain(),
             .object => |box| _ = box.retain(),
             .regex => |box| _ = box.retain(),
+            .symbol => |box| _ = box.retain(),
+            .map => |box| _ = box.retain(),
+            .set => |box| _ = box.retain(),
         }
         return self;
     }
@@ -149,6 +201,29 @@ pub const JSValue = union(enum) {
                     box.destroy();
                 }
             },
+            .symbol => |box| {
+                if (box.decref()) {
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            .map => |box| {
+                if (box.decref()) {
+                    // Unlike ZObject (String-keyed), Map keys are arbitrary
+                    // JSValues too — both sides need releasing.
+                    for (box.value.keys()) |*key| key.deinit();
+                    for (box.value.values()) |*value| value.deinit();
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            .set => |box| {
+                if (box.decref()) {
+                    for (box.value.values()) |*value| value.deinit();
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
         }
     }
 
@@ -182,5 +257,38 @@ pub const JSValue = union(enum) {
         }
 
         return .{ .object = try Rc(ZObject(JSValue)).create(box.allocator, new_obj) };
+    }
+
+    /// Rc-aware duplicate of a `.map` JSValue: retains every key AND every
+    /// value (Map keys are JSValues too, unlike ZObject's plain-string
+    /// keys), analogous to cloneArray()/cloneObject(). ZMap has no
+    /// clone()/shallow-copy method to accidentally misuse directly, unlike
+    /// ZArray/ZObject — but this still keeps the same Rc-aware-duplicate
+    /// naming convention for consistency.
+    pub fn cloneMap(self: JSValue) !JSValue {
+        const box = self.map;
+        var new_map = ZMap(JSValue, JSValue).init(box.allocator);
+        errdefer new_map.deinit();
+
+        const pairs = try box.value.entries(box.allocator);
+        defer box.allocator.free(pairs);
+        for (pairs) |pair| {
+            try new_map.set(pair.key.retain(), pair.value.retain());
+        }
+
+        return .{ .map = try Rc(ZMap(JSValue, JSValue)).create(box.allocator, new_map) };
+    }
+
+    /// Rc-aware duplicate of a `.set` JSValue: retains every value.
+    pub fn cloneSet(self: JSValue) !JSValue {
+        const box = self.set;
+        var new_set = ZSet(JSValue).init(box.allocator);
+        errdefer new_set.deinit();
+
+        for (box.value.values()) |value| {
+            try new_set.add(value.retain());
+        }
+
+        return .{ .set = try Rc(ZSet(JSValue)).create(box.allocator, new_set) };
     }
 };

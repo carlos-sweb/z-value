@@ -16,5 +16,8 @@
         .zobject = .{ .path = "../z-object" },
         .zregexp = .{ .path = "../zregexp" },
         .zstring = .{ .path = "../z-string" },
+        .zsymbol = .{ .path = "../z-symbol" },
+        .zmap = .{ .path = "../z-map" },
+        .zset = .{ .path = "../z-set" },
     },
 }

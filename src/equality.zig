@@ -8,8 +8,9 @@ const JSValue = @import("zvalue.zig").JSValue;
 
 /// ECMA262 Strict Equality Comparison (`===`) over the full JSValue union.
 /// number/string delegate to zarray.equality (content comparison, NaN never
-/// equal). array/object/regex compare by reference identity (the Rc box
-/// pointer) — correct per spec: two distinct objects are never `===`, even
+/// equal). array/object/regex/symbol/map/set compare by reference identity
+/// (the Rc box pointer) — correct per spec: two distinct objects (and two
+/// distinct symbols, even with the same description) are never `===`, even
 /// with identical content.
 pub fn strictEquals(a: JSValue, b: JSValue) bool {
     if (@as(std.meta.Tag(JSValue), a) != @as(std.meta.Tag(JSValue), b)) return false;
@@ -21,6 +22,9 @@ pub fn strictEquals(a: JSValue, b: JSValue) bool {
         .array => a.array == b.array,
         .object => a.object == b.object,
         .regex => a.regex == b.regex,
+        .symbol => a.symbol == b.symbol,
+        .map => a.map == b.map,
+        .set => a.set == b.set,
     };
 }
 
@@ -41,9 +45,9 @@ pub fn sameValueZero(a: JSValue, b: JSValue) bool {
     };
 }
 
-/// Content hash consistent with sameValueZero, for use as a HashMap key
-/// (e.g. a future Map/Set implementation). array/object/regex hash their
-/// box's pointer identity, matching their identity-based equality.
+/// Content hash consistent with sameValueZero, for use as a Map/Set/HashMap
+/// key. array/object/regex/symbol/map/set hash their box's pointer identity,
+/// matching their identity-based equality.
 pub fn hash(v: JSValue) u64 {
     return switch (v) {
         .@"undefined" => 0x1,
@@ -54,6 +58,9 @@ pub fn hash(v: JSValue) u64 {
         .array => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .object => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .regex => |box| zarray.equality.hash(usize, @intFromPtr(box)),
+        .symbol => |box| zarray.equality.hash(usize, @intFromPtr(box)),
+        .map => |box| zarray.equality.hash(usize, @intFromPtr(box)),
+        .set => |box| zarray.equality.hash(usize, @intFromPtr(box)),
     };
 }
 

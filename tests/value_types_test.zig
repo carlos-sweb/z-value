@@ -29,7 +29,7 @@ test "value types are trivially copyable (no deinit needed)" {
 }
 
 test "JSValue size is small (value types stay inline)" {
-    // Tag (smallest int that fits 8 variants) + largest payload (f64/pointer,
+    // Tag (smallest int that fits all variants) + largest payload (f64/pointer,
     // both 8 bytes) plus alignment padding. This is a sanity bound, not an
     // exact-size assertion tied to a specific Zig ABI layout decision.
     try testing.expect(@sizeOf(JSValue) <= 24);
@@ -52,6 +52,9 @@ test "switch over JSValue is exhaustive" {
             .array => "array",
             .object => "object",
             .regex => "regex",
+            .symbol => "symbol",
+            .map => "map",
+            .set => "set",
         };
         try testing.expect(label.len > 0);
     }
