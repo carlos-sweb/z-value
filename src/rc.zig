@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 /// Heap-allocated reference-counting box. Wraps any standalone type (ZArray,
-/// ZObject, Regex, RawString) without requiring that type to know about
+/// ZObject, Regex, ZString) without requiring that type to know about
 /// refcounting at all — z-value owns the counting, the wrapped library stays
 /// standalone.
 ///

@@ -4,15 +4,16 @@ const Allocator = std.mem.Allocator;
 const zarray = @import("zarray");
 const zobject = @import("zobject");
 const zregexp = @import("zregexp");
+const zstring = @import("zstring");
 
 pub const Rc = @import("rc.zig").Rc;
-pub const RawString = @import("raw_string.zig").RawString;
 pub const equality = @import("equality.zig");
 pub const ZValueError = @import("errors.zig").ZValueError;
 
 const ZArray = zarray.ZArray;
 const ZObject = zobject.ZObject;
 const Regex = zregexp.Regex;
+const ZString = zstring.ZString;
 
 /// A JS value: undefined/null/boolean/number are inline (trivially copyable
 /// bits); string/array/object/regex are heap-owning and live behind a
@@ -36,7 +37,7 @@ pub const JSValue = union(enum) {
     @"null": void,
     boolean: bool,
     number: f64,
-    string: *Rc(RawString),
+    string: *Rc(ZString),
     array: *Rc(ZArray(JSValue)),
     object: *Rc(ZObject(JSValue)),
     regex: *Rc(Regex),
@@ -53,8 +54,12 @@ pub const JSValue = union(enum) {
     }
 
     pub fn newString(allocator: Allocator, content: []const u8) !JSValue {
-        const raw = try RawString.init(allocator, content);
-        return .{ .string = try Rc(RawString).create(allocator, raw) };
+        // Always owned (initOwned, never the borrowed-mode init()) — a
+        // borrowed ZString's deinit() is a no-op, which would silently break
+        // the Rc(T) refcounting contract (the box would "free" without
+        // actually freeing anything).
+        const str = try ZString.initOwned(allocator, content);
+        return .{ .string = try Rc(ZString).create(allocator, str) };
     }
 
     pub fn newArray(allocator: Allocator) !JSValue {

@@ -3,7 +3,7 @@
 [![Versión de Zig](https://img.shields.io/badge/zig-0.16-orange.svg)](https://ziglang.org/)
 [![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](LICENSE)
 
-**Z-Value** es un tipo `JSValue` de unión etiquetada con conteo de referencias, para el ecosistema de micro-librerías [z-*](https://github.com/carlos-sweb) escrito en Zig 0.16. Es la pieza que conecta las primitivas ECMAScript independientes y de tipado estático — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [zregexp](https://github.com/carlos-sweb/zregexp) — en algo que realmente puede representar un valor JS heterogéneo: una variable, un elemento de array, o una propiedad de objeto que puede ser un número hoy y un string mañana.
+**Z-Value** es un tipo `JSValue` de unión etiquetada con conteo de referencias, para el ecosistema de micro-librerías [z-*](https://github.com/carlos-sweb) escrito en Zig 0.16. Es la pieza que conecta las primitivas ECMAScript independientes y de tipado estático — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [z-string](https://github.com/carlos-sweb/z-string), [zregexp](https://github.com/carlos-sweb/zregexp) — en algo que realmente puede representar un valor JS heterogéneo: una variable, un elemento de array, o una propiedad de objeto que puede ser un número hoy y un string mañana.
 
 [🇬🇧 English Version](README.md)
 
@@ -15,7 +15,7 @@
 
 - **Unión etiquetada, no NaN-boxing**: `undefined`/`null`/`boolean`/`number` van inline (bits trivialmente copiables); `string`/`array`/`object`/`regex` son heap-owning y viven detrás de un puntero a una caja con conteo de referencias.
 - **Reference counting** (estilo QuickJS), no un tracing GC: predecible, sin pausas, pero **no** recolecta ciclos de referencias — ver [Limitaciones Conocidas](#limitaciones-conocidas).
-- **No invasivo**: z-array/z-object/zregexp no saben nada de z-value. La caja `Rc(T)` en `src/rc.zig` los envuelve desde afuera; ninguno de esos proyectos tuvo que cambiar.
+- **No invasivo**: z-array/z-object/z-string/zregexp no saben nada de z-value. La caja `Rc(T)` en `src/rc.zig` los envuelve desde afuera; ninguno de esos proyectos tuvo que cambiar.
 
 ## Reglas de Ownership
 
@@ -39,7 +39,7 @@ arr.deinit();    // libera la referencia propia de arr a child, recursivamente
 | Variante | Estado | Notas |
 |---|---|---|
 | `undefined` / `null` / `boolean` / `number` | ✅ Completo | Inline, sin asignación de memoria |
-| `string` | ⚠️ Placeholder (`RawString`) | Solo buffer de bytes UTF-8 — sin rope/SSO/surrogates UTF-16. Se cambiará a `*Rc(ZString)` cuando [z-string](https://github.com/carlos-sweb/z-string) migre de Zig 0.15.2 a 0.16; la forma de la unión no cambia, solo el tipo del payload dentro de la misma caja. |
+| `string` | ✅ Completo | `*Rc(ZString)` de [z-string](https://github.com/carlos-sweb/z-string) — semántica completa de ECMAScript String indexada en UTF-16. `JSValue.newString()` siempre construye un `ZString` *owned* (`initOwned`, nunca el modo *borrowed* de `init`), ya que el `deinit()` de un `ZString` borrowed es un no-op y rompería silenciosamente el contrato de refcounting de Rc. |
 | `array` | ✅ Completo | `*Rc(ZArray(JSValue))`, liberación recursiva, `cloneArray()` |
 | `object` | ✅ Completo | `*Rc(ZObject(JSValue))`, liberación recursiva, `cloneObject()`. Ver el gap de prototype abajo. |
 | `regex` | ✅ Completo | `*Rc(Regex)` de zregexp, sin JSValues anidados que recorrer |
@@ -59,6 +59,7 @@ Los repos hermanos se resuelven como paths locales en `build.zig.zon` (cambiar a
     .zarray = .{ .path = "../z-array" },
     .zobject = .{ .path = "../z-object" },
     .zregexp = .{ .path = "../zregexp" },
+    .zstring = .{ .path = "../z-string" },
 },
 ```
 
@@ -69,7 +70,6 @@ z-value/
 ├── src/
 │   ├── zvalue.zig      # unión JSValue, constructores, retain()/deinit(), cloneArray()/cloneObject()
 │   ├── rc.zig            # Caja genérica de conteo de referencias Rc(T)
-│   ├── raw_string.zig    # RawString (placeholder de string, ver Soporte por variante)
 │   ├── equality.zig      # strictEquals/sameValueZero/hash/JSValueHashContext
 │   └── errors.zig
 ├── tests/

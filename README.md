@@ -3,7 +3,7 @@
 [![Zig Version](https://img.shields.io/badge/zig-0.16-orange.svg)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Z-Value** is a reference-counted, tagged-union `JSValue` type for the [z-*](https://github.com/carlos-sweb) micro-library ecosystem written in Zig 0.16. It is the piece that connects the independent, statically-typed ECMAScript primitives — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [zregexp](https://github.com/carlos-sweb/zregexp) — into something that can actually represent a heterogeneous JS value: a variable, an array element, or an object property that can be a number today and a string tomorrow.
+**Z-Value** is a reference-counted, tagged-union `JSValue` type for the [z-*](https://github.com/carlos-sweb) micro-library ecosystem written in Zig 0.16. It is the piece that connects the independent, statically-typed ECMAScript primitives — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [z-string](https://github.com/carlos-sweb/z-string), [zregexp](https://github.com/carlos-sweb/zregexp) — into something that can actually represent a heterogeneous JS value: a variable, an array element, or an object property that can be a number today and a string tomorrow.
 
 [🇪🇸 Versión en Español](README.es.md)
 
@@ -15,7 +15,7 @@
 
 - **Tagged union, not NaN-boxing**: `undefined`/`null`/`boolean`/`number` are inline (trivially copyable bits); `string`/`array`/`object`/`regex` are heap-owning and live behind a pointer to a reference-counted box.
 - **Reference counting** (QuickJS-style), not a tracing GC: predictable, no pauses, but does **not** collect reference cycles — see [Known Limitations](#known-limitations).
-- **Non-invasive**: z-array/z-object/zregexp know nothing about z-value. The `Rc(T)` box in `src/rc.zig` wraps them from the outside; none of those projects had to change.
+- **Non-invasive**: z-array/z-object/z-string/zregexp know nothing about z-value. The `Rc(T)` box in `src/rc.zig` wraps them from the outside; none of those projects had to change.
 
 ## Ownership Rules
 
@@ -39,7 +39,7 @@ arr.deinit();    // releases arr's own reference to child, recursively
 | Variant | Status | Notes |
 |---|---|---|
 | `undefined` / `null` / `boolean` / `number` | ✅ Complete | Inline, no allocation |
-| `string` | ⚠️ Placeholder (`RawString`) | UTF-8 byte buffer only — no rope/SSO/UTF-16 surrogates. Will swap to `*Rc(ZString)` once [z-string](https://github.com/carlos-sweb/z-string) ports from Zig 0.15.2 to 0.16; the union shape doesn't change, only the payload type inside the same box. |
+| `string` | ✅ Complete | `*Rc(ZString)` from [z-string](https://github.com/carlos-sweb/z-string) — full UTF-16-indexed ECMAScript String semantics. `JSValue.newString()` always constructs an *owned* `ZString` (`initOwned`, never the borrowed-mode `init`), since a borrowed `ZString`'s `deinit()` is a no-op and would silently break the Rc refcounting contract. |
 | `array` | ✅ Complete | `*Rc(ZArray(JSValue))`, recursive release, `cloneArray()` |
 | `object` | ✅ Complete | `*Rc(ZObject(JSValue))`, recursive release, `cloneObject()`. See prototype gap below. |
 | `regex` | ✅ Complete | `*Rc(Regex)` from zregexp, no nested JSValues to recurse into |
@@ -59,6 +59,7 @@ Sibling repos are resolved as local paths in `build.zig.zon` (swap for `zig fetc
     .zarray = .{ .path = "../z-array" },
     .zobject = .{ .path = "../z-object" },
     .zregexp = .{ .path = "../zregexp" },
+    .zstring = .{ .path = "../z-string" },
 },
 ```
 
@@ -69,7 +70,6 @@ z-value/
 ├── src/
 │   ├── zvalue.zig      # JSValue union, constructors, retain()/deinit(), cloneArray()/cloneObject()
 │   ├── rc.zig            # Rc(T) generic refcounting box
-│   ├── raw_string.zig    # RawString (string placeholder, see Variant support)
 │   ├── equality.zig      # strictEquals/sameValueZero/hash/JSValueHashContext
 │   └── errors.zig
 ├── tests/

@@ -17,7 +17,7 @@ pub fn strictEquals(a: JSValue, b: JSValue) bool {
         .@"undefined", .@"null" => true,
         .boolean => a.boolean == b.boolean,
         .number => zarray.equality.strictEquals(f64, a.number, b.number),
-        .string => zarray.equality.strictEquals([]const u8, a.string.value.bytes, b.string.value.bytes),
+        .string => zarray.equality.strictEquals([]const u8, a.string.value.data, b.string.value.data),
         .array => a.array == b.array,
         .object => a.object == b.object,
         .regex => a.regex == b.regex,
@@ -36,7 +36,7 @@ pub fn sameValueZero(a: JSValue, b: JSValue) bool {
     if (@as(std.meta.Tag(JSValue), a) != @as(std.meta.Tag(JSValue), b)) return false;
     return switch (a) {
         .number => zarray.equality.sameValueZero(f64, a.number, b.number),
-        .string => zarray.equality.sameValueZero([]const u8, a.string.value.bytes, b.string.value.bytes),
+        .string => zarray.equality.sameValueZero([]const u8, a.string.value.data, b.string.value.data),
         else => strictEquals(a, b),
     };
 }
@@ -50,7 +50,7 @@ pub fn hash(v: JSValue) u64 {
         .@"null" => 0x2,
         .boolean => |b| if (b) @as(u64, 0x3) else @as(u64, 0x4),
         .number => |n| zarray.equality.hash(f64, n),
-        .string => |box| zarray.equality.hash([]const u8, box.value.bytes),
+        .string => |box| zarray.equality.hash([]const u8, box.value.data),
         .array => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .object => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .regex => |box| zarray.equality.hash(usize, @intFromPtr(box)),

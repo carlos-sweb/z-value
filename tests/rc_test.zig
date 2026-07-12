@@ -21,7 +21,16 @@ test "string value: retain twice, deinit twice, no leak" {
 test "string value: content is preserved" {
     const s = try JSValue.newString(testing.allocator, "hola mundo");
     defer s.deinit();
-    try testing.expectEqualStrings("hola mundo", s.string.value.bytes);
+    try testing.expectEqualStrings("hola mundo", s.string.value.data);
+}
+
+test "string value: uses real ZString UTF-16 semantics, not a raw byte count" {
+    // A single emoji is 4 bytes in UTF-8 but 2 UTF-16 code units (surrogate
+    // pair) — this only passes against the real z-string ZString.length(),
+    // never against a naive byte-length placeholder.
+    const s = try JSValue.newString(testing.allocator, "\u{1F600}");
+    defer s.deinit();
+    try testing.expectEqual(@as(usize, 2), s.string.value.length());
 }
 
 test "retain on value types is a no-op (no box to touch)" {

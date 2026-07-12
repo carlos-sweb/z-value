@@ -15,5 +15,6 @@
         .zarray = .{ .path = "../z-array" },
         .zobject = .{ .path = "../z-object" },
         .zregexp = .{ .path = "../zregexp" },
+        .zstring = .{ .path = "../z-string" },
     },
 }
