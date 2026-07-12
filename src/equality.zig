@@ -25,6 +25,7 @@ pub fn strictEquals(a: JSValue, b: JSValue) bool {
         .symbol => a.symbol == b.symbol,
         .map => a.map == b.map,
         .set => a.set == b.set,
+        .@"error" => a.@"error" == b.@"error",
     };
 }
 
@@ -61,6 +62,7 @@ pub fn hash(v: JSValue) u64 {
         .symbol => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .map => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .set => |box| zarray.equality.hash(usize, @intFromPtr(box)),
+        .@"error" => |box| zarray.equality.hash(usize, @intFromPtr(box)),
     };
 }
 

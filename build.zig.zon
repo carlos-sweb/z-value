@@ -19,5 +19,6 @@
         .zsymbol = .{ .path = "../z-symbol" },
         .zmap = .{ .path = "../z-map" },
         .zset = .{ .path = "../z-set" },
+        .zerror = .{ .path = "../z-error" },
     },
 }

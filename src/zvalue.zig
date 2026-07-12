@@ -8,6 +8,7 @@ const zstring = @import("zstring");
 const zsymbol = @import("zsymbol");
 const zmap = @import("zmap");
 const zset = @import("zset");
+const zerror = @import("zerror");
 
 pub const Rc = @import("rc.zig").Rc;
 pub const equality = @import("equality.zig");
@@ -20,6 +21,8 @@ const ZString = zstring.ZString;
 const ZSymbol = zsymbol.ZSymbol;
 const ZMap = zmap.ZMap;
 const ZSet = zset.ZSet;
+const ZError = zerror.ZError;
+pub const ErrorKind = zerror.ErrorKind;
 
 /// A JS value: undefined/null/boolean/number are inline (trivially copyable
 /// bits); string/array/object/regex are heap-owning and live behind a
@@ -50,6 +53,7 @@ pub const JSValue = union(enum) {
     symbol: *Rc(ZSymbol),
     map: *Rc(ZMap(JSValue, JSValue)),
     set: *Rc(ZSet(JSValue)),
+    @"error": *Rc(ZError(JSValue)),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -107,6 +111,27 @@ pub const JSValue = union(enum) {
         return .{ .set = try Rc(ZSet(JSValue)).create(allocator, s) };
     }
 
+    /// Errors are objects in JS (typeOf() below reports "object", not
+    /// "error") but get their own JSValue variant for cheap identity
+    /// comparison and type-safe dispatch (e.g. an interpreter's catch-clause
+    /// matching), same rationale as symbol/map/set each getting their own
+    /// variant instead of being represented as plain `.object` values.
+    pub fn newError(allocator: Allocator, kind: ErrorKind, message: []const u8) !JSValue {
+        const err = try ZError(JSValue).init(allocator, kind, message);
+        return .{ .@"error" = try Rc(ZError(JSValue)).create(allocator, err) };
+    }
+
+    /// AggregateError. Like arr.push()/map.set(), this does NOT retain
+    /// `errs` for you — ZError(JSValue).initAggregate() only byte-copies the
+    /// slice (same shallow-copy shape as ZArray.clone(), see the
+    /// OWNERSHIP RULE at the top of this file). If you still need your own
+    /// copy of a value after this call, retain() it yourself first:
+    /// `newAggregateError(alloc, "msg", &.{ a.retain(), b.retain() })`.
+    pub fn newAggregateError(allocator: Allocator, message: []const u8, errs: []const JSValue) !JSValue {
+        const err = try ZError(JSValue).initAggregate(allocator, message, errs);
+        return .{ .@"error" = try Rc(ZError(JSValue)).create(allocator, err) };
+    }
+
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
     /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
     /// are all typeof "object" too — only functions (not modeled yet) are
@@ -119,7 +144,7 @@ pub const JSValue = union(enum) {
             .number => "number",
             .string => "string",
             .symbol => "symbol",
-            .array, .object, .regex, .map, .set => "object",
+            .array, .object, .regex, .map, .set, .@"error" => "object",
         };
     }
 
@@ -154,6 +179,7 @@ pub const JSValue = union(enum) {
             .symbol => |box| _ = box.retain(),
             .map => |box| _ = box.retain(),
             .set => |box| _ = box.retain(),
+            .@"error" => |box| _ = box.retain(),
         }
         return self;
     }
@@ -224,6 +250,17 @@ pub const JSValue = union(enum) {
                     box.destroy();
                 }
             },
+            .@"error" => |box| {
+                if (box.decref()) {
+                    // AggregateError's errors slice holds JSValues too (only
+                    // non-null for .aggregate_error; a no-op loop otherwise).
+                    if (box.value.errors) |errs| {
+                        for (errs) |*e| e.deinit();
+                    }
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
         }
     }
 
@@ -290,5 +327,23 @@ pub const JSValue = union(enum) {
         }
 
         return .{ .set = try Rc(ZSet(JSValue)).create(box.allocator, new_set) };
+    }
+
+    /// Rc-aware duplicate of a `.error` JSValue: for AggregateError, retains
+    /// every JSValue in `errors` (analogous to cloneArray()/cloneSet()) —
+    /// ZError(JSValue).initAggregate() only byte-copies the slice it's given,
+    /// it does not retain on its own.
+    pub fn cloneError(self: JSValue) !JSValue {
+        const box = self.@"error";
+        var new_err: ZError(JSValue) = undefined;
+        if (box.value.errors) |errs| {
+            const retained = try box.allocator.alloc(JSValue, errs.len);
+            defer box.allocator.free(retained);
+            for (errs, 0..) |e, i| retained[i] = e.retain();
+            new_err = try ZError(JSValue).initAggregate(box.allocator, box.value.message, retained);
+        } else {
+            new_err = try ZError(JSValue).init(box.allocator, box.value.kind, box.value.message);
+        }
+        return .{ .@"error" = try Rc(ZError(JSValue)).create(box.allocator, new_err) };
     }
 };
