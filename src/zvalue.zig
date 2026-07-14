@@ -13,6 +13,7 @@ const zerror = @import("zerror");
 pub const Rc = @import("rc.zig").Rc;
 pub const equality = @import("equality.zig");
 pub const ZValueError = @import("errors.zig").ZValueError;
+pub const Callable = @import("callable.zig").Callable;
 
 const ZArray = zarray.ZArray;
 const ZObject = zobject.ZObject;
@@ -54,6 +55,7 @@ pub const JSValue = union(enum) {
     map: *Rc(ZMap(JSValue, JSValue)),
     set: *Rc(ZSet(JSValue)),
     @"error": *Rc(ZError(JSValue)),
+    function: *Rc(Callable),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -132,10 +134,17 @@ pub const JSValue = union(enum) {
         return .{ .@"error" = try Rc(ZError(JSValue)).create(allocator, err) };
     }
 
+    /// Wraps a native or user-defined `Callable` (see callable.zig) as a
+    /// JSValue -- functions are first-class values in JS: they can be
+    /// stored in variables/properties/arrays and compared by identity.
+    pub fn newFunction(allocator: Allocator, callable: Callable) !JSValue {
+        return .{ .function = try Rc(Callable).create(allocator, callable) };
+    }
+
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
     /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
-    /// are all typeof "object" too — only functions (not modeled yet) are
-    /// "function". `symbol` is its own distinct typeof result.
+    /// are all typeof "object" too — only functions get their own "function"
+    /// result, everything else heap-boxed is "object".
     pub fn typeOf(self: JSValue) []const u8 {
         return switch (self) {
             .@"undefined" => "undefined",
@@ -144,6 +153,7 @@ pub const JSValue = union(enum) {
             .number => "number",
             .string => "string",
             .symbol => "symbol",
+            .function => "function",
             .array, .object, .regex, .map, .set, .@"error" => "object",
         };
     }
@@ -180,6 +190,7 @@ pub const JSValue = union(enum) {
             .map => |box| _ = box.retain(),
             .set => |box| _ = box.retain(),
             .@"error" => |box| _ = box.retain(),
+            .function => |box| _ = box.retain(),
         }
         return self;
     }
@@ -257,6 +268,12 @@ pub const JSValue = union(enum) {
                     if (box.value.errors) |errs| {
                         for (errs) |*e| e.deinit();
                     }
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            .function => |box| {
+                if (box.decref()) {
                     box.value.deinit();
                     box.destroy();
                 }
