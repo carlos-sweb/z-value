@@ -17,6 +17,16 @@ pub const Callable = struct {
     /// Declared parameter count (excludes rest/defaults), for `.length`.
     arity: usize = 0,
     call: *const fn (ctx: *anyopaque, allocator: Allocator, this_value: JSValue, args: []const JSValue) anyerror!JSValue,
+    /// Lazily-created `prototype` property (constructor semantics) -- null
+    /// until first touched by an interpreter. Always an `.object` JSValue
+    /// when set. Managed entirely by whoever installs the callable (e.g.
+    /// an interpreter arena-allocating it); never released here.
+    prototype: ?JSValue = null,
+    /// Whether `new` may be applied to this callable. Arrows and
+    /// host/native functions are not constructors (real spec behavior);
+    /// an interpreter's ordinary function/function-expression closures
+    /// set this true.
+    constructable: bool = false,
 
     /// No-op: a Callable owns nothing of its own to release. Whatever
     /// `ctx` points at is the installer's responsibility to manage (e.g.
