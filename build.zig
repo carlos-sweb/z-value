@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
     const zmap_dep = b.dependency("zmap", .{ .target = target, .optimize = optimize });
     const zset_dep = b.dependency("zset", .{ .target = target, .optimize = optimize });
     const zerror_dep = b.dependency("zerror", .{ .target = target, .optimize = optimize });
+    const zdate_dep = b.dependency("zdate", .{ .target = target, .optimize = optimize });
     const zarray_module = zarray_dep.module("zarray");
     const zobject_module = zobject_dep.module("zobject");
     const zregexp_module = zregexp_dep.module("zregexp");
@@ -20,6 +21,7 @@ pub fn build(b: *std.Build) void {
     const zmap_module = zmap_dep.module("zmap");
     const zset_module = zset_dep.module("zset");
     const zerror_module = zerror_dep.module("zerror");
+    const zdate_module = zdate_dep.module("zdate");
 
     const zvalue_module = b.addModule("zvalue", .{
         .root_source_file = b.path("src/zvalue.zig"),
@@ -32,6 +34,7 @@ pub fn build(b: *std.Build) void {
     zvalue_module.addImport("zmap", zmap_module);
     zvalue_module.addImport("zset", zset_module);
     zvalue_module.addImport("zerror", zerror_module);
+    zvalue_module.addImport("zdate", zdate_module);
 
     const test_step = b.step("test", "Run all tests");
 
@@ -47,6 +50,7 @@ pub fn build(b: *std.Build) void {
         "tests/error_test.zig",
         "tests/equality_test.zig",
         "tests/callable_test.zig",
+        "tests/date_test.zig",
     };
 
     inline for (test_files) |test_file| {
@@ -67,6 +71,7 @@ pub fn build(b: *std.Build) void {
         unit_tests.root_module.addImport("zmap", zmap_module);
         unit_tests.root_module.addImport("zset", zset_module);
         unit_tests.root_module.addImport("zerror", zerror_module);
+        unit_tests.root_module.addImport("zdate", zdate_module);
 
         const run_unit_tests = b.addRunArtifact(unit_tests);
         test_step.dependOn(&run_unit_tests.step);

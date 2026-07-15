@@ -57,6 +57,7 @@ test "switch over JSValue is exhaustive" {
             .set => "set",
             .@"error" => "error",
             .function => "function",
+            .date => "date",
         };
         try testing.expect(label.len > 0);
     }

@@ -9,6 +9,7 @@ const zsymbol = @import("zsymbol");
 const zmap = @import("zmap");
 const zset = @import("zset");
 const zerror = @import("zerror");
+const zdate = @import("zdate");
 
 pub const Rc = @import("rc.zig").Rc;
 pub const equality = @import("equality.zig");
@@ -24,6 +25,7 @@ const ZMap = zmap.ZMap;
 const ZSet = zset.ZSet;
 const ZError = zerror.ZError;
 pub const ErrorKind = zerror.ErrorKind;
+pub const ZDate = zdate.ZDate;
 
 /// A JS value: undefined/null/boolean/number are inline (trivially copyable
 /// bits); string/array/object/regex are heap-owning and live behind a
@@ -56,6 +58,7 @@ pub const JSValue = union(enum) {
     set: *Rc(ZSet(JSValue)),
     @"error": *Rc(ZError(JSValue)),
     function: *Rc(Callable),
+    date: *Rc(ZDate),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -141,6 +144,13 @@ pub const JSValue = union(enum) {
         return .{ .function = try Rc(Callable).create(allocator, callable) };
     }
 
+    /// A Date from milliseconds since the Unix epoch. Out-of-range values
+    /// become z-date's INVALID_TIME (the "Invalid Date" state), matching
+    /// the real Date constructor.
+    pub fn newDate(allocator: Allocator, ms: i64) !JSValue {
+        return .{ .date = try Rc(ZDate).create(allocator, ZDate.fromTimestamp(ms)) };
+    }
+
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
     /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
     /// are all typeof "object" too — only functions get their own "function"
@@ -154,7 +164,7 @@ pub const JSValue = union(enum) {
             .string => "string",
             .symbol => "symbol",
             .function => "function",
-            .array, .object, .regex, .map, .set, .@"error" => "object",
+            .array, .object, .regex, .map, .set, .@"error", .date => "object",
         };
     }
 
@@ -191,6 +201,7 @@ pub const JSValue = union(enum) {
             .set => |box| _ = box.retain(),
             .@"error" => |box| _ = box.retain(),
             .function => |box| _ = box.retain(),
+            .date => |box| _ = box.retain(),
         }
         return self;
     }
@@ -275,6 +286,13 @@ pub const JSValue = union(enum) {
             .function => |box| {
                 if (box.decref()) {
                     box.value.deinit();
+                    box.destroy();
+                }
+            },
+            // ZDate is a pure 8-byte value (no allocator stored, no
+            // deinit of its own) -- only the Rc box itself needs freeing.
+            .date => |box| {
+                if (box.decref()) {
                     box.destroy();
                 }
             },
