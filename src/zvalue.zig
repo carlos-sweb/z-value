@@ -244,7 +244,11 @@ pub const JSValue = union(enum) {
             },
             .object => |box| {
                 if (box.decref()) {
-                    for (box.value.properties.values()) |prop| prop.value.deinit();
+                    for (box.value.properties.values()) |prop| {
+                        prop.value.deinit();
+                        if (prop.getter) |g| g.deinit();
+                        if (prop.setter) |s| s.deinit();
+                    }
                     box.value.deinit();
                     box.destroy();
                 }
