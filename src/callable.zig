@@ -27,6 +27,13 @@ pub const Callable = struct {
     /// an interpreter's ordinary function/function-expression closures
     /// set this true.
     constructable: bool = false,
+    /// Lazily-created property bag for everything else assigned onto the
+    /// function (`F.myProp = 1`, class statics). Same contract as
+    /// `prototype`: null until first touched, always an `.object` JSValue
+    /// when set, managed entirely by the installer. Static inheritance
+    /// (`class B extends A` seeing `A.staticMethod` through `B`) falls
+    /// out of chaining this bag's ZObject prototype to the parent's bag.
+    statics: ?JSValue = null,
 
     /// No-op: a Callable owns nothing of its own to release. Whatever
     /// `ctx` points at is the installer's responsibility to manage (e.g.
