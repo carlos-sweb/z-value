@@ -10,6 +10,7 @@ const zmap = @import("zmap");
 const zset = @import("zset");
 const zerror = @import("zerror");
 const zdate = @import("zdate");
+const zpromise = @import("zpromise");
 
 pub const Rc = @import("rc.zig").Rc;
 pub const equality = @import("equality.zig");
@@ -26,6 +27,8 @@ const ZSet = zset.ZSet;
 const ZError = zerror.ZError;
 pub const ErrorKind = zerror.ErrorKind;
 pub const ZDate = zdate.ZDate;
+pub const ZPromise = zpromise.ZPromise;
+pub const PromiseState = zpromise.State;
 
 /// A JS value: undefined/null/boolean/number are inline (trivially copyable
 /// bits); string/array/object/regex are heap-owning and live behind a
@@ -59,6 +62,7 @@ pub const JSValue = union(enum) {
     @"error": *Rc(ZError(JSValue)),
     function: *Rc(Callable),
     date: *Rc(ZDate),
+    promise: *Rc(ZPromise(JSValue)),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -151,6 +155,13 @@ pub const JSValue = union(enum) {
         return .{ .date = try Rc(ZDate).create(allocator, ZDate.fromTimestamp(ms)) };
     }
 
+    /// A fresh pending Promise. State transitions and reaction scheduling
+    /// are the embedder's job (see z-promise's own doc: it stores, the
+    /// interpreter schedules and calls).
+    pub fn newPromise(allocator: Allocator) !JSValue {
+        return .{ .promise = try Rc(ZPromise(JSValue)).create(allocator, ZPromise(JSValue).init()) };
+    }
+
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
     /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
     /// are all typeof "object" too — only functions get their own "function"
@@ -164,7 +175,7 @@ pub const JSValue = union(enum) {
             .string => "string",
             .symbol => "symbol",
             .function => "function",
-            .array, .object, .regex, .map, .set, .@"error", .date => "object",
+            .array, .object, .regex, .map, .set, .@"error", .date, .promise => "object",
         };
     }
 
@@ -202,6 +213,7 @@ pub const JSValue = union(enum) {
             .@"error" => |box| _ = box.retain(),
             .function => |box| _ = box.retain(),
             .date => |box| _ = box.retain(),
+            .promise => |box| _ = box.retain(),
         }
         return self;
     }
@@ -297,6 +309,20 @@ pub const JSValue = union(enum) {
             // deinit of its own) -- only the Rc box itself needs freeing.
             .date => |box| {
                 if (box.decref()) {
+                    box.destroy();
+                }
+            },
+            .promise => |box| {
+                if (box.decref()) {
+                    // The settled result and every handler/derived in
+                    // still-pending reactions are JSValues this box owns.
+                    if (box.value.result) |r| r.deinit();
+                    for (box.value.reactions.items) |reaction| {
+                        if (reaction.on_fulfilled) |h| h.deinit();
+                        if (reaction.on_rejected) |h| h.deinit();
+                        if (reaction.derived) |d| d.deinit();
+                    }
+                    box.value.deinit(box.allocator);
                     box.destroy();
                 }
             },
