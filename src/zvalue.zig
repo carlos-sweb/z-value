@@ -29,6 +29,9 @@ pub const ErrorKind = zerror.ErrorKind;
 pub const ZDate = zdate.ZDate;
 pub const ZPromise = zpromise.ZPromise;
 pub const PromiseState = zpromise.State;
+/// Re-exported for embedders implementing Object.defineProperty over
+/// ZObject records.
+pub const PropertyDescriptor = zobject.PropertyDescriptor;
 
 /// A JS value: undefined/null/boolean/number are inline (trivially copyable
 /// bits); string/array/object/regex are heap-owning and live behind a
