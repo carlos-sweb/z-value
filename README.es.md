@@ -3,7 +3,7 @@
 [![Versión de Zig](https://img.shields.io/badge/zig-0.16-orange.svg)](https://ziglang.org/)
 [![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](LICENSE)
 
-**Z-Value** es un tipo `JSValue` de unión etiquetada con conteo de referencias, para el ecosistema de micro-librerías [z-*](https://github.com/carlos-sweb) escrito en Zig 0.16. Es la pieza que conecta las primitivas ECMAScript independientes y de tipado estático — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [z-string](https://github.com/carlos-sweb/z-string), [zregexp](https://github.com/carlos-sweb/zregexp), [z-symbol](https://github.com/carlos-sweb/z-symbol), [z-map](https://github.com/carlos-sweb/z-map), [z-set](https://github.com/carlos-sweb/z-set), [z-error](https://github.com/carlos-sweb/z-error) — en algo que realmente puede representar un valor JS heterogéneo: una variable, un elemento de array, o una propiedad de objeto que puede ser un número hoy y un string mañana.
+**Z-Value** es un tipo `JSValue` de unión etiquetada con conteo de referencias, para el ecosistema de micro-librerías [z-*](https://github.com/carlos-sweb) escrito en Zig 0.16. Es la pieza que conecta las primitivas ECMAScript independientes y de tipado estático — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [z-string](https://github.com/carlos-sweb/z-string), [zregex](https://github.com/carlos-sweb/z-regex), [z-symbol](https://github.com/carlos-sweb/z-symbol), [z-map](https://github.com/carlos-sweb/z-map), [z-set](https://github.com/carlos-sweb/z-set), [z-error](https://github.com/carlos-sweb/z-error) — en algo que realmente puede representar un valor JS heterogéneo: una variable, un elemento de array, o una propiedad de objeto que puede ser un número hoy y un string mañana.
 
 [🇬🇧 English Version](README.md)
 
@@ -15,7 +15,7 @@
 
 - **Unión etiquetada, no NaN-boxing**: `undefined`/`null`/`boolean`/`number` van inline (bits trivialmente copiables); `string`/`array`/`object`/`regex`/`symbol`/`map`/`set` son heap-owning y viven detrás de un puntero a una caja con conteo de referencias.
 - **Reference counting** (estilo QuickJS), no un tracing GC: predecible, sin pausas, pero **no** recolecta ciclos de referencias — ver [Limitaciones Conocidas](#limitaciones-conocidas).
-- **No invasivo**: z-array/z-object/z-string/zregexp/z-symbol/z-map/z-set/z-error no saben nada de z-value. La caja `Rc(T)` en `src/rc.zig` los envuelve desde afuera; ninguno de esos proyectos tuvo que cambiar su propio diseño para esto (z-symbol sí ganó un agregado chico y autocontenido — ver [Soporte por variante](#soporte-por-variante) — pero nada específico de z-value se filtró ahí).
+- **No invasivo**: z-array/z-object/z-string/zregex/z-symbol/z-map/z-set/z-error no saben nada de z-value. La caja `Rc(T)` en `src/rc.zig` los envuelve desde afuera; ninguno de esos proyectos tuvo que cambiar su propio diseño para esto (z-symbol sí ganó un agregado chico y autocontenido — ver [Soporte por variante](#soporte-por-variante) — pero nada específico de z-value se filtró ahí).
 - **`JSValue` soporta el mismo duck-typing de igualdad genérica que cualquier otro struct/union**: expone `eql(a, b) bool` (SameValueZero) y `hash(self) u64`, detectados automáticamente por la maquinaria genérica de [z-equality](https://github.com/carlos-sweb/z-equality) — esto es lo que permite que `ZMap(JSValue, JSValue)`/`ZSet(JSValue)` funcionen. (z-equality ganó soporte genérico para uniones etiquetadas por esto; ver su propio README.)
 
 ## Reglas de Ownership
@@ -43,7 +43,7 @@ arr.deinit();    // libera la referencia propia de arr a child, recursivamente
 | `string` | ✅ Completo | `*Rc(ZString)` de [z-string](https://github.com/carlos-sweb/z-string) — semántica completa de ECMAScript String indexada en UTF-16. `JSValue.newString()` siempre construye un `ZString` *owned* (`initOwned`, nunca el modo *borrowed* de `init`), ya que el `deinit()` de un `ZString` borrowed es un no-op y rompería silenciosamente el contrato de refcounting de Rc. |
 | `array` | ✅ Completo | `*Rc(ZArray(JSValue))`, liberación recursiva, `cloneArray()` |
 | `object` | ✅ Completo | `*Rc(ZObject(JSValue))`, liberación recursiva, `cloneObject()`. Ver el gap de prototype abajo. |
-| `regex` | ✅ Completo | `*Rc(Regex)` de zregexp, sin JSValues anidados que recorrer |
+| `regex` | ✅ Completo | `*Rc(Regex)` de zregex, sin JSValues anidados que recorrer |
 | `symbol` | ✅ Completo | `*Rc(ZSymbol)` de [z-symbol](https://github.com/carlos-sweb/z-symbol). `JSValue.newSymbol()` usa `ZSymbol.init()` (un valor, no la asignación propia de `create()`) para que la caja Rc sea la única asignación real del símbolo; z-symbol ganó un `ZSymbol.deinit()` a juego (libera solo la descripción, no `self`) para esto — `destroy()` sigue siendo `deinit()` + liberar self, para uso standalone (no envuelto en Rc). `typeOf()` es `"symbol"`, su propio resultado distinto (no `"object"`). |
 | `map` | ✅ Completo | `*Rc(ZMap(JSValue, JSValue))` de [z-map](https://github.com/carlos-sweb/z-map). Liberación recursiva de claves *y* valores (a diferencia de `object`, cuyas claves son strings planos, las claves de `Map` también son `JSValue` arbitrarios). `cloneMap()`. |
 | `set` | ✅ Completo | `*Rc(ZSet(JSValue))` de [z-set](https://github.com/carlos-sweb/z-set). Liberación recursiva de valores. `cloneSet()`. |
@@ -63,7 +63,7 @@ Los repos hermanos se resuelven como paths locales en `build.zig.zon` (cambiar a
 .dependencies = .{
     .zarray = .{ .path = "../z-array" },
     .zobject = .{ .path = "../z-object" },
-    .zregexp = .{ .path = "../zregexp" },
+    .zregex = .{ .path = "../z-regex" },
     .zstring = .{ .path = "../z-string" },
     .zsymbol = .{ .path = "../z-symbol" },
     .zmap = .{ .path = "../z-map" },

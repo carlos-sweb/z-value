@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 
 const zarray = @import("zarray");
 const zobject = @import("zobject");
-const zregexp = @import("zregexp");
+const zregex = @import("zregex");
 const zstring = @import("zstring");
 const zsymbol = @import("zsymbol");
 const zmap = @import("zmap");
@@ -19,7 +19,7 @@ pub const Callable = @import("callable.zig").Callable;
 
 const ZArray = zarray.ZArray;
 const ZObject = zobject.ZObject;
-const Regex = zregexp.Regex;
+const Regex = zregex.Regex;
 const ZString = zstring.ZString;
 const ZSymbol = zsymbol.ZSymbol;
 const ZMap = zmap.ZMap;
@@ -98,7 +98,7 @@ pub const JSValue = union(enum) {
     }
 
     /// Takes ownership of an already-compiled Regex (e.g. from
-    /// `zregexp.Regex.compile()`).
+    /// `zregex.Regex.compile()`).
     pub fn fromRegex(allocator: Allocator, re: Regex) !JSValue {
         return .{ .regex = try Rc(Regex).create(allocator, re) };
     }

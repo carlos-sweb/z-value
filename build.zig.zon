@@ -14,7 +14,7 @@
     .dependencies = .{
         .zarray = .{ .path = "../z-array" },
         .zobject = .{ .path = "../z-object" },
-        .zregexp = .{ .path = "../zregexp" },
+        .zregex = .{ .path = "../z-regex" },
         .zstring = .{ .path = "../z-string" },
         .zsymbol = .{ .path = "../z-symbol" },
         .zmap = .{ .path = "../z-map" },

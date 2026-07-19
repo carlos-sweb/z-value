@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
 
     const zarray_dep = b.dependency("zarray", .{ .target = target, .optimize = optimize });
     const zobject_dep = b.dependency("zobject", .{ .target = target, .optimize = optimize });
-    const zregexp_dep = b.dependency("zregexp", .{ .target = target, .optimize = optimize });
+    const zregex_dep = b.dependency("zregex", .{ .target = target, .optimize = optimize });
     const zstring_dep = b.dependency("zstring", .{ .target = target, .optimize = optimize });
     const zsymbol_dep = b.dependency("zsymbol", .{ .target = target, .optimize = optimize });
     const zmap_dep = b.dependency("zmap", .{ .target = target, .optimize = optimize });
@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const zpromise_dep = b.dependency("zpromise", .{ .target = target, .optimize = optimize });
     const zarray_module = zarray_dep.module("zarray");
     const zobject_module = zobject_dep.module("zobject");
-    const zregexp_module = zregexp_dep.module("zregexp");
+    const zregex_module = zregex_dep.module("zregex");
     const zstring_module = zstring_dep.module("zstring");
     const zsymbol_module = zsymbol_dep.module("zsymbol");
     const zmap_module = zmap_dep.module("zmap");
@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
     });
     zvalue_module.addImport("zarray", zarray_module);
     zvalue_module.addImport("zobject", zobject_module);
-    zvalue_module.addImport("zregexp", zregexp_module);
+    zvalue_module.addImport("zregex", zregex_module);
     zvalue_module.addImport("zstring", zstring_module);
     zvalue_module.addImport("zsymbol", zsymbol_module);
     zvalue_module.addImport("zmap", zmap_module);
@@ -68,7 +68,7 @@ pub fn build(b: *std.Build) void {
         unit_tests.root_module.addImport("zvalue", zvalue_module);
         unit_tests.root_module.addImport("zarray", zarray_module);
         unit_tests.root_module.addImport("zobject", zobject_module);
-        unit_tests.root_module.addImport("zregexp", zregexp_module);
+        unit_tests.root_module.addImport("zregex", zregex_module);
         unit_tests.root_module.addImport("zstring", zstring_module);
         unit_tests.root_module.addImport("zsymbol", zsymbol_module);
         unit_tests.root_module.addImport("zmap", zmap_module);
