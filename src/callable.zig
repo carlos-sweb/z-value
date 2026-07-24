@@ -38,8 +38,9 @@ pub const Callable = struct {
     /// Releases `prototype`/`statics` if they were ever touched (both are
     /// owned by this Callable once set -- see their own doc comments).
     /// Whatever `ctx` points at stays the installer's responsibility (e.g.
-    /// an interpreter arena-allocating closure contexts and never freeing
-    /// them individually) -- z-value doesn't know its shape.
+    /// an interpreter's own GC registry looks `ctx`'s address up by
+    /// itself to find any further nodes to trace) -- z-value doesn't know
+    /// its shape.
     pub fn deinit(self: *Callable) void {
         if (self.prototype) |p| p.deinit();
         if (self.statics) |s| s.deinit();

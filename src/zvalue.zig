@@ -221,6 +221,27 @@ pub const JSValue = union(enum) {
         return self;
     }
 
+    /// Sets the GC hook (see `Rc(T).setGcHook`) on whichever box backs this
+    /// value; a no-op for the four inline variants. An embedder uses this
+    /// right after creating a value to keep an external registry in sync
+    /// with `Rc.destroy()`, wherever that ends up being triggered from.
+    pub fn setGcHook(self: JSValue, ctx: *anyopaque, hook: *const fn (ctx: *anyopaque, box: *anyopaque) void) void {
+        switch (self) {
+            .@"undefined", .@"null", .boolean, .number => {},
+            .string => |box| _ = box.setGcHook(ctx, hook),
+            .array => |box| _ = box.setGcHook(ctx, hook),
+            .object => |box| _ = box.setGcHook(ctx, hook),
+            .regex => |box| _ = box.setGcHook(ctx, hook),
+            .symbol => |box| _ = box.setGcHook(ctx, hook),
+            .map => |box| _ = box.setGcHook(ctx, hook),
+            .set => |box| _ = box.setGcHook(ctx, hook),
+            .@"error" => |box| _ = box.setGcHook(ctx, hook),
+            .function => |box| _ = box.setGcHook(ctx, hook),
+            .date => |box| _ = box.setGcHook(ctx, hook),
+            .promise => |box| _ = box.setGcHook(ctx, hook),
+        }
+    }
+
     /// Releases this reference. When the underlying box's refcount reaches
     /// zero, tears down the wrapped value (recursively releasing any nested
     /// JSValues first) and frees the box.
