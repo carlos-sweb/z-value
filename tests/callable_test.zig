@@ -40,6 +40,17 @@ test "function value: retain twice, deinit twice, no leak" {
     f2.deinit();
 }
 
+test "function value: deinit releases its prototype and statics (no leak)" {
+    var dummy_ctx: u8 = 0;
+    const f = try JSValue.newFunction(testing.allocator, .{ .ctx = &dummy_ctx, .call = dummyCall });
+    f.function.value.prototype = try JSValue.newObject(testing.allocator);
+    f.function.value.statics = try JSValue.newObject(testing.allocator);
+    // No `defer` on the prototype/statics themselves -- deinit() below must
+    // release them (Callable.deinit() used to be a no-op); testing.allocator
+    // fails the test if anything's left unfreed.
+    f.deinit();
+}
+
 test "two distinct function values are never strictly equal, even with identical fields" {
     var ctx1: u8 = 0;
     var ctx2: u8 = 0;

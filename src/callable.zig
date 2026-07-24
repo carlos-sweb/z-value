@@ -35,11 +35,13 @@ pub const Callable = struct {
     /// out of chaining this bag's ZObject prototype to the parent's bag.
     statics: ?JSValue = null,
 
-    /// No-op: a Callable owns nothing of its own to release. Whatever
-    /// `ctx` points at is the installer's responsibility to manage (e.g.
+    /// Releases `prototype`/`statics` if they were ever touched (both are
+    /// owned by this Callable once set -- see their own doc comments).
+    /// Whatever `ctx` points at stays the installer's responsibility (e.g.
     /// an interpreter arena-allocating closure contexts and never freeing
-    /// them individually).
+    /// them individually) -- z-value doesn't know its shape.
     pub fn deinit(self: *Callable) void {
-        _ = self;
+        if (self.prototype) |p| p.deinit();
+        if (self.statics) |s| s.deinit();
     }
 };
