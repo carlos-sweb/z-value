@@ -11,7 +11,10 @@ const JSValue = @import("zvalue.zig").JSValue;
 /// equal). array/object/regex/symbol/map/set compare by reference identity
 /// (the Rc box pointer) — correct per spec: two distinct objects (and two
 /// distinct symbols, even with the same description) are never `===`, even
-/// with identical content.
+/// with identical content. bigint is the odd one out among the heap-boxed
+/// variants (alongside string): `1n === 1n` is `true` even across two
+/// independently-parsed/allocated instances, so it compares by VALUE, not
+/// by Rc box identity — see z-bigint's `ZBigInt.eql`.
 pub fn strictEquals(a: JSValue, b: JSValue) bool {
     if (@as(std.meta.Tag(JSValue), a) != @as(std.meta.Tag(JSValue), b)) return false;
     return switch (a) {
@@ -29,6 +32,7 @@ pub fn strictEquals(a: JSValue, b: JSValue) bool {
         .function => a.function == b.function,
         .date => a.date == b.date,
         .promise => a.promise == b.promise,
+        .bigint => a.bigint.value.eql(b.bigint.value),
     };
 }
 
@@ -51,7 +55,8 @@ pub fn sameValueZero(a: JSValue, b: JSValue) bool {
 
 /// Content hash consistent with sameValueZero, for use as a Map/Set/HashMap
 /// key. array/object/regex/symbol/map/set hash their box's pointer identity,
-/// matching their identity-based equality.
+/// matching their identity-based equality. bigint hashes by VALUE (see
+/// strictEquals' doc comment above) so it stays consistent with `eql`.
 pub fn hash(v: JSValue) u64 {
     return switch (v) {
         .@"undefined" => 0x1,
@@ -69,6 +74,7 @@ pub fn hash(v: JSValue) u64 {
         .function => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .date => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .promise => |box| zarray.equality.hash(usize, @intFromPtr(box)),
+        .bigint => |box| zarray.equality.hash(u64, box.value.hash()),
     };
 }
 

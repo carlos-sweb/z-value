@@ -22,5 +22,6 @@
         .zerror = .{ .path = "../z-error" },
         .zdate = .{ .path = "../z-date" },
         .zpromise = .{ .path = "../z-promise" },
+        .zbigint = .{ .path = "../z-bigint" },
     },
 }

@@ -11,6 +11,7 @@ const zset = @import("zset");
 const zerror = @import("zerror");
 const zdate = @import("zdate");
 const zpromise = @import("zpromise");
+const zbigint = @import("zbigint");
 
 pub const Rc = @import("rc.zig").Rc;
 pub const equality = @import("equality.zig");
@@ -29,6 +30,8 @@ pub const ErrorKind = zerror.ErrorKind;
 pub const ZDate = zdate.ZDate;
 pub const ZPromise = zpromise.ZPromise;
 pub const PromiseState = zpromise.State;
+pub const ZBigInt = zbigint.ZBigInt;
+pub const BigIntError = zbigint.BigIntError;
 /// Re-exported for embedders implementing Object.defineProperty over
 /// ZObject records.
 pub const PropertyDescriptor = zobject.PropertyDescriptor;
@@ -66,6 +69,7 @@ pub const JSValue = union(enum) {
     function: *Rc(Callable),
     date: *Rc(ZDate),
     promise: *Rc(ZPromise(JSValue)),
+    bigint: *Rc(ZBigInt),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -165,6 +169,14 @@ pub const JSValue = union(enum) {
         return .{ .promise = try Rc(ZPromise(JSValue)).create(allocator, ZPromise(JSValue).init()) };
     }
 
+    /// Parses the exact raw digit text a BigInt literal/coercion hands in
+    /// (see z-bigint's `ZBigInt.fromDigitText` for the accepted grammar:
+    /// optional `0x`/`0o`/`0b` prefix, `_` separators, optional sign).
+    pub fn newBigInt(allocator: Allocator, raw_digit_text: []const u8) BigIntError!JSValue {
+        const v = try ZBigInt.fromDigitText(allocator, raw_digit_text);
+        return .{ .bigint = try Rc(ZBigInt).create(allocator, v) };
+    }
+
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
     /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
     /// are all typeof "object" too — only functions get their own "function"
@@ -178,6 +190,7 @@ pub const JSValue = union(enum) {
             .string => "string",
             .symbol => "symbol",
             .function => "function",
+            .bigint => "bigint",
             .array, .object, .regex, .map, .set, .@"error", .date, .promise => "object",
         };
     }
@@ -217,6 +230,7 @@ pub const JSValue = union(enum) {
             .function => |box| _ = box.retain(),
             .date => |box| _ = box.retain(),
             .promise => |box| _ = box.retain(),
+            .bigint => |box| _ = box.retain(),
         }
         return self;
     }
@@ -239,6 +253,7 @@ pub const JSValue = union(enum) {
             .function => |box| _ = box.setGcHook(ctx, hook),
             .date => |box| _ = box.setGcHook(ctx, hook),
             .promise => |box| _ = box.setGcHook(ctx, hook),
+            .bigint => |box| _ = box.setGcHook(ctx, hook),
         }
     }
 
@@ -347,6 +362,14 @@ pub const JSValue = union(enum) {
                         if (reaction.derived) |d| d.deinit();
                     }
                     box.value.deinit(box.allocator);
+                    box.destroy();
+                }
+            },
+            // Unlike ZDate, ZBigInt owns real heap storage (its digit
+            // limbs) -- follows Symbol's deinit shape, not Date's.
+            .bigint => |box| {
+                if (box.decref()) {
+                    box.value.deinit();
                     box.destroy();
                 }
             },

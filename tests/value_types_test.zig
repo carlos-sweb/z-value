@@ -59,6 +59,7 @@ test "switch over JSValue is exhaustive" {
             .function => "function",
             .date => "date",
             .promise => "promise",
+            .bigint => "bigint",
         };
         try testing.expect(label.len > 0);
     }
