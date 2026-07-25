@@ -33,6 +33,10 @@ pub fn strictEquals(a: JSValue, b: JSValue) bool {
         .date => a.date == b.date,
         .promise => a.promise == b.promise,
         .bigint => a.bigint.value.eql(b.bigint.value),
+        // Back to identity, like Date/Symbol -- the opposite of bigint's
+        // value-equality special case right above. Two Proxy objects are
+        // never `===` just because they happen to wrap the same target.
+        .proxy => a.proxy == b.proxy,
     };
 }
 
@@ -75,6 +79,7 @@ pub fn hash(v: JSValue) u64 {
         .date => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .promise => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .bigint => |box| zarray.equality.hash(u64, box.value.hash()),
+        .proxy => |box| zarray.equality.hash(usize, @intFromPtr(box)),
     };
 }
 

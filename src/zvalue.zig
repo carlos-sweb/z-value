@@ -17,6 +17,7 @@ pub const Rc = @import("rc.zig").Rc;
 pub const equality = @import("equality.zig");
 pub const ZValueError = @import("errors.zig").ZValueError;
 pub const Callable = @import("callable.zig").Callable;
+pub const Proxy = @import("proxy.zig").Proxy;
 
 const ZArray = zarray.ZArray;
 const ZObject = zobject.ZObject;
@@ -70,6 +71,7 @@ pub const JSValue = union(enum) {
     date: *Rc(ZDate),
     promise: *Rc(ZPromise(JSValue)),
     bigint: *Rc(ZBigInt),
+    proxy: *Rc(Proxy),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -177,6 +179,12 @@ pub const JSValue = union(enum) {
         return .{ .bigint = try Rc(ZBigInt).create(allocator, v) };
     }
 
+    /// Does NOT retain `target`/`handler` for you (see proxy.zig's doc
+    /// comment) -- same convention as `newAggregateError`'s `errs`.
+    pub fn newProxy(allocator: Allocator, target: JSValue, handler: JSValue) !JSValue {
+        return .{ .proxy = try Rc(Proxy).create(allocator, .{ .target = target, .handler = handler }) };
+    }
+
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
     /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
     /// are all typeof "object" too — only functions get their own "function"
@@ -191,6 +199,12 @@ pub const JSValue = union(enum) {
             .symbol => "symbol",
             .function => "function",
             .bigint => "bigint",
+            // Reports the TARGET's type, not a fixed "object" -- a proxy
+            // wrapping a callable is itself typeof "function". Plain
+            // recursion (not a special "is this transitively callable"
+            // helper): if target is itself a proxy, this naturally
+            // unwraps one layer at a time until it hits a real leaf.
+            .proxy => |box| box.value.target.typeOf(),
             .array, .object, .regex, .map, .set, .@"error", .date, .promise => "object",
         };
     }
@@ -231,6 +245,7 @@ pub const JSValue = union(enum) {
             .date => |box| _ = box.retain(),
             .promise => |box| _ = box.retain(),
             .bigint => |box| _ = box.retain(),
+            .proxy => |box| _ = box.retain(),
         }
         return self;
     }
@@ -254,6 +269,7 @@ pub const JSValue = union(enum) {
             .date => |box| _ = box.setGcHook(ctx, hook),
             .promise => |box| _ = box.setGcHook(ctx, hook),
             .bigint => |box| _ = box.setGcHook(ctx, hook),
+            .proxy => |box| _ = box.setGcHook(ctx, hook),
         }
     }
 
@@ -368,6 +384,12 @@ pub const JSValue = union(enum) {
             // Unlike ZDate, ZBigInt owns real heap storage (its digit
             // limbs) -- follows Symbol's deinit shape, not Date's.
             .bigint => |box| {
+                if (box.decref()) {
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            .proxy => |box| {
                 if (box.decref()) {
                     box.value.deinit();
                     box.destroy();
