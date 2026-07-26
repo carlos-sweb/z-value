@@ -37,6 +37,10 @@ pub fn strictEquals(a: JSValue, b: JSValue) bool {
         // value-equality special case right above. Two Proxy objects are
         // never `===` just because they happen to wrap the same target.
         .proxy => a.proxy == b.proxy,
+        // Identity, like Date/Symbol/Proxy -- two ArrayBuffers/DataViews
+        // are never `===` just because they wrap the same bytes.
+        .array_buffer => a.array_buffer == b.array_buffer,
+        .data_view => a.data_view == b.data_view,
     };
 }
 
@@ -80,6 +84,8 @@ pub fn hash(v: JSValue) u64 {
         .promise => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .bigint => |box| zarray.equality.hash(u64, box.value.hash()),
         .proxy => |box| zarray.equality.hash(usize, @intFromPtr(box)),
+        .array_buffer => |box| zarray.equality.hash(usize, @intFromPtr(box)),
+        .data_view => |box| zarray.equality.hash(usize, @intFromPtr(box)),
     };
 }
 

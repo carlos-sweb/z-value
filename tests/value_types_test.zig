@@ -61,6 +61,8 @@ test "switch over JSValue is exhaustive" {
             .promise => "promise",
             .bigint => "bigint",
             .proxy => "proxy",
+            .array_buffer => "array_buffer",
+            .data_view => "data_view",
         };
         try testing.expect(label.len > 0);
     }

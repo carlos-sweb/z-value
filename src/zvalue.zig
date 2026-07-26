@@ -12,12 +12,14 @@ const zerror = @import("zerror");
 const zdate = @import("zdate");
 const zpromise = @import("zpromise");
 const zbigint = @import("zbigint");
+const zbuffer = @import("zbuffer");
 
 pub const Rc = @import("rc.zig").Rc;
 pub const equality = @import("equality.zig");
 pub const ZValueError = @import("errors.zig").ZValueError;
 pub const Callable = @import("callable.zig").Callable;
 pub const Proxy = @import("proxy.zig").Proxy;
+pub const DataViewBox = @import("data_view_box.zig").DataViewBox;
 
 const ZArray = zarray.ZArray;
 const ZObject = zobject.ZObject;
@@ -33,6 +35,8 @@ pub const ZPromise = zpromise.ZPromise;
 pub const PromiseState = zpromise.State;
 pub const ZBigInt = zbigint.ZBigInt;
 pub const BigIntError = zbigint.BigIntError;
+pub const ArrayBuffer = zbuffer.ArrayBuffer;
+pub const BufferError = zbuffer.BufferError;
 /// Re-exported for embedders implementing Object.defineProperty over
 /// ZObject records.
 pub const PropertyDescriptor = zobject.PropertyDescriptor;
@@ -72,6 +76,8 @@ pub const JSValue = union(enum) {
     promise: *Rc(ZPromise(JSValue)),
     bigint: *Rc(ZBigInt),
     proxy: *Rc(Proxy),
+    array_buffer: *Rc(ArrayBuffer),
+    data_view: *Rc(DataViewBox),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -194,6 +200,33 @@ pub const JSValue = union(enum) {
         return .{ .proxy = try Rc(Proxy).create(allocator, .{ .target = target, .handler = handler }) };
     }
 
+    /// Allocates a new zero-initialized `ArrayBuffer` of `byte_length`
+    /// bytes.
+    pub fn newArrayBuffer(allocator: Allocator, byte_length: usize) !JSValue {
+        const buf = try ArrayBuffer.init(allocator, byte_length);
+        return .{ .array_buffer = try Rc(ArrayBuffer).create(allocator, buf) };
+    }
+
+    /// `owner` must be a `.array_buffer` JSValue -- asserts, doesn't
+    /// return an error, since this is an internal-invariant violation
+    /// (the caller, not a JS-facing API, is responsible for validating
+    /// the argument is really an ArrayBuffer before reaching here; the
+    /// wiring layer's own constructor does that validation and throws a
+    /// real JS TypeError before ever calling this).
+    ///
+    /// Does NOT retain `owner` for you (same convention as `newProxy`'s
+    /// `target`/`handler`) -- the caller must `.retain()` it first if it
+    /// still needs its own reference afterward.
+    pub fn newDataView(allocator: Allocator, owner: JSValue, byte_offset: usize, byte_length: ?usize) BufferError!JSValue {
+        // `owner` is already a retained reference handed off by the
+        // caller -- on any error below, nothing else will ever release
+        // it, so this function must.
+        errdefer owner.deinit();
+        const box = owner.array_buffer;
+        const view = try zbuffer.DataView.init(&box.value, byte_offset, byte_length);
+        return .{ .data_view = try Rc(DataViewBox).create(allocator, .{ .view = view, .owner = owner }) };
+    }
+
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
     /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
     /// are all typeof "object" too — only functions get their own "function"
@@ -214,7 +247,7 @@ pub const JSValue = union(enum) {
             // helper): if target is itself a proxy, this naturally
             // unwraps one layer at a time until it hits a real leaf.
             .proxy => |box| box.value.target.typeOf(),
-            .array, .object, .regex, .map, .set, .@"error", .date, .promise => "object",
+            .array, .object, .regex, .map, .set, .@"error", .date, .promise, .array_buffer, .data_view => "object",
         };
     }
 
@@ -255,6 +288,8 @@ pub const JSValue = union(enum) {
             .promise => |box| _ = box.retain(),
             .bigint => |box| _ = box.retain(),
             .proxy => |box| _ = box.retain(),
+            .array_buffer => |box| _ = box.retain(),
+            .data_view => |box| _ = box.retain(),
         }
         return self;
     }
@@ -279,6 +314,8 @@ pub const JSValue = union(enum) {
             .promise => |box| _ = box.setGcHook(ctx, hook),
             .bigint => |box| _ = box.setGcHook(ctx, hook),
             .proxy => |box| _ = box.setGcHook(ctx, hook),
+            .array_buffer => |box| _ = box.setGcHook(ctx, hook),
+            .data_view => |box| _ = box.setGcHook(ctx, hook),
         }
     }
 
@@ -399,6 +436,24 @@ pub const JSValue = union(enum) {
                 }
             },
             .proxy => |box| {
+                if (box.decref()) {
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            // ArrayBuffer owns real heap storage (its byte allocation) --
+            // follows Symbol/BigInt's deinit shape, not Date's bare-value
+            // one.
+            .array_buffer => |box| {
+                if (box.decref()) {
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            // DataView owns no bytes of its own -- only releases the
+            // `.array_buffer` JSValue it reads/writes through (matching
+            // Proxy's target/handler convention).
+            .data_view => |box| {
                 if (box.decref()) {
                     box.value.deinit();
                     box.destroy();
