@@ -41,6 +41,7 @@ pub fn strictEquals(a: JSValue, b: JSValue) bool {
         // are never `===` just because they wrap the same bytes.
         .array_buffer => a.array_buffer == b.array_buffer,
         .data_view => a.data_view == b.data_view,
+        .typed_array => a.typed_array == b.typed_array,
     };
 }
 
@@ -86,6 +87,7 @@ pub fn hash(v: JSValue) u64 {
         .proxy => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .array_buffer => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .data_view => |box| zarray.equality.hash(usize, @intFromPtr(box)),
+        .typed_array => |box| zarray.equality.hash(usize, @intFromPtr(box)),
     };
 }
 

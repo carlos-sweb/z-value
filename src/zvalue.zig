@@ -20,6 +20,8 @@ pub const ZValueError = @import("errors.zig").ZValueError;
 pub const Callable = @import("callable.zig").Callable;
 pub const Proxy = @import("proxy.zig").Proxy;
 pub const DataViewBox = @import("data_view_box.zig").DataViewBox;
+pub const TypedArrayBox = @import("typed_array_box.zig").TypedArrayBox;
+pub const TypedKind = @import("typed_array_box.zig").TypedKind;
 
 const ZArray = zarray.ZArray;
 const ZObject = zobject.ZObject;
@@ -78,6 +80,7 @@ pub const JSValue = union(enum) {
     proxy: *Rc(Proxy),
     array_buffer: *Rc(ArrayBuffer),
     data_view: *Rc(DataViewBox),
+    typed_array: *Rc(TypedArrayBox),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -227,6 +230,34 @@ pub const JSValue = union(enum) {
         return .{ .data_view = try Rc(DataViewBox).create(allocator, .{ .view = view, .owner = owner }) };
     }
 
+    /// Same "caller retains, this takes ownership" convention as
+    /// `newDataView`, and the same validate-via-delegation shape:
+    /// dispatches to the right `zbuffer.TypedArrayView(T).init` for its
+    /// `Misaligned`/`OutOfBounds` bounds checking AND to resolve `len`
+    /// when omitted (`null` -> every whole element from `byte_offset` to
+    /// the end of the buffer, matching `new Int32Array(buffer,
+    /// byteOffset)` with no length argument) -- the returned view's
+    /// `.len` is what actually gets stored; `TypedArrayBox` keeps the
+    /// raw offset/len/kind and reconstructs a view on demand per access,
+    /// since `kind` is a runtime tag and `T` isn't known until then.
+    pub fn newTypedArray(allocator: Allocator, owner: JSValue, byte_offset: usize, len: ?usize, kind: TypedKind) BufferError!JSValue {
+        errdefer owner.deinit();
+        const box = owner.array_buffer;
+        const resolved_len: usize = switch (kind) {
+            .i8 => (try zbuffer.TypedArrayView(i8).init(&box.value, byte_offset, len)).len,
+            .u8, .u8_clamped => (try zbuffer.TypedArrayView(u8).init(&box.value, byte_offset, len)).len,
+            .i16 => (try zbuffer.TypedArrayView(i16).init(&box.value, byte_offset, len)).len,
+            .u16 => (try zbuffer.TypedArrayView(u16).init(&box.value, byte_offset, len)).len,
+            .i32 => (try zbuffer.TypedArrayView(i32).init(&box.value, byte_offset, len)).len,
+            .u32 => (try zbuffer.TypedArrayView(u32).init(&box.value, byte_offset, len)).len,
+            .f32 => (try zbuffer.TypedArrayView(f32).init(&box.value, byte_offset, len)).len,
+            .f64 => (try zbuffer.TypedArrayView(f64).init(&box.value, byte_offset, len)).len,
+            .i64 => (try zbuffer.TypedArrayView(i64).init(&box.value, byte_offset, len)).len,
+            .u64 => (try zbuffer.TypedArrayView(u64).init(&box.value, byte_offset, len)).len,
+        };
+        return .{ .typed_array = try Rc(TypedArrayBox).create(allocator, .{ .owner = owner, .byte_offset = byte_offset, .len = resolved_len, .kind = kind }) };
+    }
+
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
     /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
     /// are all typeof "object" too — only functions get their own "function"
@@ -247,7 +278,7 @@ pub const JSValue = union(enum) {
             // helper): if target is itself a proxy, this naturally
             // unwraps one layer at a time until it hits a real leaf.
             .proxy => |box| box.value.target.typeOf(),
-            .array, .object, .regex, .map, .set, .@"error", .date, .promise, .array_buffer, .data_view => "object",
+            .array, .object, .regex, .map, .set, .@"error", .date, .promise, .array_buffer, .data_view, .typed_array => "object",
         };
     }
 
@@ -290,6 +321,7 @@ pub const JSValue = union(enum) {
             .proxy => |box| _ = box.retain(),
             .array_buffer => |box| _ = box.retain(),
             .data_view => |box| _ = box.retain(),
+            .typed_array => |box| _ = box.retain(),
         }
         return self;
     }
@@ -316,6 +348,7 @@ pub const JSValue = union(enum) {
             .proxy => |box| _ = box.setGcHook(ctx, hook),
             .array_buffer => |box| _ = box.setGcHook(ctx, hook),
             .data_view => |box| _ = box.setGcHook(ctx, hook),
+            .typed_array => |box| _ = box.setGcHook(ctx, hook),
         }
     }
 
@@ -454,6 +487,14 @@ pub const JSValue = union(enum) {
             // `.array_buffer` JSValue it reads/writes through (matching
             // Proxy's target/handler convention).
             .data_view => |box| {
+                if (box.decref()) {
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            // Owns no bytes of its own -- only releases the `.array_buffer`
+            // JSValue it reads/writes through, same shape as `.data_view`.
+            .typed_array => |box| {
                 if (box.decref()) {
                     box.value.deinit();
                     box.destroy();

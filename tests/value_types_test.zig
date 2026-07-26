@@ -63,6 +63,7 @@ test "switch over JSValue is exhaustive" {
             .proxy => "proxy",
             .array_buffer => "array_buffer",
             .data_view => "data_view",
+            .typed_array => "typed_array",
         };
         try testing.expect(label.len > 0);
     }

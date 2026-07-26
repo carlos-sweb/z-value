@@ -63,6 +63,7 @@ pub fn build(b: *std.Build) void {
         "tests/bigint_test.zig",
         "tests/proxy_test.zig",
         "tests/data_view_box_test.zig",
+        "tests/typed_array_box_test.zig",
     };
 
     inline for (test_files) |test_file| {
