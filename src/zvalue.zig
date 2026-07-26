@@ -179,6 +179,15 @@ pub const JSValue = union(enum) {
         return .{ .bigint = try Rc(ZBigInt).create(allocator, v) };
     }
 
+    /// Boxes an already-computed `ZBigInt` (e.g. the result of
+    /// `ZBigInt.add`/`.mul`/etc.) -- unlike `newBigInt`, does not parse
+    /// digit text. Takes ownership of `v` (matching `newDate`/`newSymbol`'s
+    /// "box whatever you're handed" convention for freshly-constructed
+    /// values with no other owner yet).
+    pub fn newBigIntFromValue(allocator: Allocator, v: ZBigInt) !JSValue {
+        return .{ .bigint = try Rc(ZBigInt).create(allocator, v) };
+    }
+
     /// Does NOT retain `target`/`handler` for you (see proxy.zig's doc
     /// comment) -- same convention as `newAggregateError`'s `errs`.
     pub fn newProxy(allocator: Allocator, target: JSValue, handler: JSValue) !JSValue {
