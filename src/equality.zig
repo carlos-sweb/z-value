@@ -42,6 +42,10 @@ pub fn strictEquals(a: JSValue, b: JSValue) bool {
         .array_buffer => a.array_buffer == b.array_buffer,
         .data_view => a.data_view == b.data_view,
         .typed_array => a.typed_array == b.typed_array,
+        // Identity, like Date -- two Temporal instances are never `===`
+        // just because they represent the same date/time/duration; JS
+        // code compares them with `.equals()`.
+        .temporal => a.temporal == b.temporal,
     };
 }
 
@@ -88,6 +92,7 @@ pub fn hash(v: JSValue) u64 {
         .array_buffer => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .data_view => |box| zarray.equality.hash(usize, @intFromPtr(box)),
         .typed_array => |box| zarray.equality.hash(usize, @intFromPtr(box)),
+        .temporal => |box| zarray.equality.hash(usize, @intFromPtr(box)),
     };
 }
 

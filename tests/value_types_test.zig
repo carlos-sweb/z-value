@@ -64,6 +64,7 @@ test "switch over JSValue is exhaustive" {
             .array_buffer => "array_buffer",
             .data_view => "data_view",
             .typed_array => "typed_array",
+            .temporal => "temporal",
         };
         try testing.expect(label.len > 0);
     }

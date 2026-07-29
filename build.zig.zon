@@ -24,5 +24,6 @@
         .zpromise = .{ .path = "../z-promise" },
         .zbigint = .{ .path = "../z-bigint" },
         .zbuffer = .{ .path = "../z-buffer" },
+        .ztemporal = .{ .path = "../z-temporal" },
     },
 }

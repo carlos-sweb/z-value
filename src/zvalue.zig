@@ -13,6 +13,7 @@ const zdate = @import("zdate");
 const zpromise = @import("zpromise");
 const zbigint = @import("zbigint");
 const zbuffer = @import("zbuffer");
+const ztemporal_value = @import("temporal_value.zig");
 
 pub const Rc = @import("rc.zig").Rc;
 pub const equality = @import("equality.zig");
@@ -39,6 +40,7 @@ pub const ZBigInt = zbigint.ZBigInt;
 pub const BigIntError = zbigint.BigIntError;
 pub const ArrayBuffer = zbuffer.ArrayBuffer;
 pub const BufferError = zbuffer.BufferError;
+pub const TemporalValue = ztemporal_value.TemporalValue;
 /// Re-exported for embedders implementing Object.defineProperty over
 /// ZObject records.
 pub const PropertyDescriptor = zobject.PropertyDescriptor;
@@ -81,6 +83,7 @@ pub const JSValue = union(enum) {
     array_buffer: *Rc(ArrayBuffer),
     data_view: *Rc(DataViewBox),
     typed_array: *Rc(TypedArrayBox),
+    temporal: *Rc(TemporalValue),
 
     pub const UNDEFINED: JSValue = .{ .@"undefined" = {} };
     pub const NULL: JSValue = .{ .@"null" = {} };
@@ -171,6 +174,13 @@ pub const JSValue = union(enum) {
     /// the real Date constructor.
     pub fn newDate(allocator: Allocator, ms: i64) !JSValue {
         return .{ .date = try Rc(ZDate).create(allocator, ZDate.fromTimestamp(ms)) };
+    }
+
+    /// Wraps any of the 8 z-temporal instance types (see `TemporalValue`'s
+    /// doc comment for why they share one variant instead of getting one
+    /// each).
+    pub fn newTemporal(allocator: Allocator, value: TemporalValue) !JSValue {
+        return .{ .temporal = try Rc(TemporalValue).create(allocator, value) };
     }
 
     /// A fresh pending Promise. State transitions and reaction scheduling
@@ -278,7 +288,7 @@ pub const JSValue = union(enum) {
             // helper): if target is itself a proxy, this naturally
             // unwraps one layer at a time until it hits a real leaf.
             .proxy => |box| box.value.target.typeOf(),
-            .array, .object, .regex, .map, .set, .@"error", .date, .promise, .array_buffer, .data_view, .typed_array => "object",
+            .array, .object, .regex, .map, .set, .@"error", .date, .promise, .array_buffer, .data_view, .typed_array, .temporal => "object",
         };
     }
 
@@ -322,6 +332,7 @@ pub const JSValue = union(enum) {
             .array_buffer => |box| _ = box.retain(),
             .data_view => |box| _ = box.retain(),
             .typed_array => |box| _ = box.retain(),
+            .temporal => |box| _ = box.retain(),
         }
         return self;
     }
@@ -349,6 +360,7 @@ pub const JSValue = union(enum) {
             .array_buffer => |box| _ = box.setGcHook(ctx, hook),
             .data_view => |box| _ = box.setGcHook(ctx, hook),
             .typed_array => |box| _ = box.setGcHook(ctx, hook),
+            .temporal => |box| _ = box.setGcHook(ctx, hook),
         }
     }
 
@@ -442,6 +454,13 @@ pub const JSValue = union(enum) {
             // ZDate is a pure 8-byte value (no allocator stored, no
             // deinit of its own) -- only the Rc box itself needs freeing.
             .date => |box| {
+                if (box.decref()) {
+                    box.destroy();
+                }
+            },
+            // Every z-temporal type is a pure value too (see
+            // TemporalValue's doc comment) -- same shape as .date.
+            .temporal => |box| {
                 if (box.decref()) {
                     box.destroy();
                 }

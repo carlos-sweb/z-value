@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     const zpromise_dep = b.dependency("zpromise", .{ .target = target, .optimize = optimize });
     const zbigint_dep = b.dependency("zbigint", .{ .target = target, .optimize = optimize });
     const zbuffer_dep = b.dependency("zbuffer", .{ .target = target, .optimize = optimize });
+    const ztemporal_dep = b.dependency("ztemporal", .{ .target = target, .optimize = optimize });
     const zarray_module = zarray_dep.module("zarray");
     const zobject_module = zobject_dep.module("zobject");
     const zregex_module = zregex_dep.module("zregex");
@@ -28,6 +29,7 @@ pub fn build(b: *std.Build) void {
     const zpromise_module = zpromise_dep.module("zpromise");
     const zbigint_module = zbigint_dep.module("zbigint");
     const zbuffer_module = zbuffer_dep.module("zbuffer");
+    const ztemporal_module = ztemporal_dep.module("ztemporal");
 
     const zvalue_module = b.addModule("zvalue", .{
         .root_source_file = b.path("src/zvalue.zig"),
@@ -44,6 +46,7 @@ pub fn build(b: *std.Build) void {
     zvalue_module.addImport("zpromise", zpromise_module);
     zvalue_module.addImport("zbigint", zbigint_module);
     zvalue_module.addImport("zbuffer", zbuffer_module);
+    zvalue_module.addImport("ztemporal", ztemporal_module);
 
     const test_step = b.step("test", "Run all tests");
 
@@ -64,6 +67,7 @@ pub fn build(b: *std.Build) void {
         "tests/proxy_test.zig",
         "tests/data_view_box_test.zig",
         "tests/typed_array_box_test.zig",
+        "tests/temporal_test.zig",
     };
 
     inline for (test_files) |test_file| {
@@ -88,6 +92,7 @@ pub fn build(b: *std.Build) void {
         unit_tests.root_module.addImport("zpromise", zpromise_module);
         unit_tests.root_module.addImport("zbigint", zbigint_module);
         unit_tests.root_module.addImport("zbuffer", zbuffer_module);
+        unit_tests.root_module.addImport("ztemporal", ztemporal_module);
 
         const run_unit_tests = b.addRunArtifact(unit_tests);
         test_step.dependOn(&run_unit_tests.step);
