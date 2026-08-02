@@ -1,52 +1,31 @@
 const std = @import("std");
 
+// Every sibling z-* dependency's package name matches its module name
+// (e.g. "zarray" -> module "zarray") -- one list drives the dependency
+// fetch, the module lookup, and every addImport call site below, so a
+// new dependency only needs one line added here.
+const dep_names = [_][]const u8{
+    "zarray",    "zobject", "zregex", "zstring",  "zsymbol", "zmap",
+    "zset",      "zerror",  "zdate",  "zpromise", "zbigint", "zbuffer",
+    "ztemporal",
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zarray_dep = b.dependency("zarray", .{ .target = target, .optimize = optimize });
-    const zobject_dep = b.dependency("zobject", .{ .target = target, .optimize = optimize });
-    const zregex_dep = b.dependency("zregex", .{ .target = target, .optimize = optimize });
-    const zstring_dep = b.dependency("zstring", .{ .target = target, .optimize = optimize });
-    const zsymbol_dep = b.dependency("zsymbol", .{ .target = target, .optimize = optimize });
-    const zmap_dep = b.dependency("zmap", .{ .target = target, .optimize = optimize });
-    const zset_dep = b.dependency("zset", .{ .target = target, .optimize = optimize });
-    const zerror_dep = b.dependency("zerror", .{ .target = target, .optimize = optimize });
-    const zdate_dep = b.dependency("zdate", .{ .target = target, .optimize = optimize });
-    const zpromise_dep = b.dependency("zpromise", .{ .target = target, .optimize = optimize });
-    const zbigint_dep = b.dependency("zbigint", .{ .target = target, .optimize = optimize });
-    const zbuffer_dep = b.dependency("zbuffer", .{ .target = target, .optimize = optimize });
-    const ztemporal_dep = b.dependency("ztemporal", .{ .target = target, .optimize = optimize });
-    const zarray_module = zarray_dep.module("zarray");
-    const zobject_module = zobject_dep.module("zobject");
-    const zregex_module = zregex_dep.module("zregex");
-    const zstring_module = zstring_dep.module("zstring");
-    const zsymbol_module = zsymbol_dep.module("zsymbol");
-    const zmap_module = zmap_dep.module("zmap");
-    const zset_module = zset_dep.module("zset");
-    const zerror_module = zerror_dep.module("zerror");
-    const zdate_module = zdate_dep.module("zdate");
-    const zpromise_module = zpromise_dep.module("zpromise");
-    const zbigint_module = zbigint_dep.module("zbigint");
-    const zbuffer_module = zbuffer_dep.module("zbuffer");
-    const ztemporal_module = ztemporal_dep.module("ztemporal");
+    var dep_modules: [dep_names.len]*std.Build.Module = undefined;
+    inline for (dep_names, 0..) |name, i| {
+        const dep = b.dependency(name, .{ .target = target, .optimize = optimize });
+        dep_modules[i] = dep.module(name);
+    }
 
     const zvalue_module = b.addModule("zvalue", .{
         .root_source_file = b.path("src/zvalue.zig"),
     });
-    zvalue_module.addImport("zarray", zarray_module);
-    zvalue_module.addImport("zobject", zobject_module);
-    zvalue_module.addImport("zregex", zregex_module);
-    zvalue_module.addImport("zstring", zstring_module);
-    zvalue_module.addImport("zsymbol", zsymbol_module);
-    zvalue_module.addImport("zmap", zmap_module);
-    zvalue_module.addImport("zset", zset_module);
-    zvalue_module.addImport("zerror", zerror_module);
-    zvalue_module.addImport("zdate", zdate_module);
-    zvalue_module.addImport("zpromise", zpromise_module);
-    zvalue_module.addImport("zbigint", zbigint_module);
-    zvalue_module.addImport("zbuffer", zbuffer_module);
-    zvalue_module.addImport("ztemporal", ztemporal_module);
+    inline for (dep_names, 0..) |name, i| {
+        zvalue_module.addImport(name, dep_modules[i]);
+    }
 
     const test_step = b.step("test", "Run all tests");
 
@@ -80,19 +59,9 @@ pub fn build(b: *std.Build) void {
         });
 
         unit_tests.root_module.addImport("zvalue", zvalue_module);
-        unit_tests.root_module.addImport("zarray", zarray_module);
-        unit_tests.root_module.addImport("zobject", zobject_module);
-        unit_tests.root_module.addImport("zregex", zregex_module);
-        unit_tests.root_module.addImport("zstring", zstring_module);
-        unit_tests.root_module.addImport("zsymbol", zsymbol_module);
-        unit_tests.root_module.addImport("zmap", zmap_module);
-        unit_tests.root_module.addImport("zset", zset_module);
-        unit_tests.root_module.addImport("zerror", zerror_module);
-        unit_tests.root_module.addImport("zdate", zdate_module);
-        unit_tests.root_module.addImport("zpromise", zpromise_module);
-        unit_tests.root_module.addImport("zbigint", zbigint_module);
-        unit_tests.root_module.addImport("zbuffer", zbuffer_module);
-        unit_tests.root_module.addImport("ztemporal", ztemporal_module);
+        inline for (dep_names, 0..) |name, i| {
+            unit_tests.root_module.addImport(name, dep_modules[i]);
+        }
 
         const run_unit_tests = b.addRunArtifact(unit_tests);
         test_step.dependOn(&run_unit_tests.step);

@@ -44,8 +44,8 @@ test "switch over JSValue is exhaustive" {
     };
     for (values) |v| {
         const label: []const u8 = switch (v) {
-            .@"undefined" => "undefined",
-            .@"null" => "null",
+            .undefined => "undefined",
+            .null => "null",
             .boolean => "boolean",
             .number => "number",
             .string => "string",

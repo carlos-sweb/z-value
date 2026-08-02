@@ -18,7 +18,7 @@ const JSValue = @import("zvalue.zig").JSValue;
 pub fn strictEquals(a: JSValue, b: JSValue) bool {
     if (@as(std.meta.Tag(JSValue), a) != @as(std.meta.Tag(JSValue), b)) return false;
     return switch (a) {
-        .@"undefined", .@"null" => true,
+        .undefined, .null => true,
         .boolean => a.boolean == b.boolean,
         .number => zarray.equality.strictEquals(f64, a.number, b.number),
         .string => zarray.equality.strictEquals([]const u8, a.string.value.data, b.string.value.data),
@@ -72,8 +72,8 @@ pub fn sameValueZero(a: JSValue, b: JSValue) bool {
 /// strictEquals' doc comment above) so it stays consistent with `eql`.
 pub fn hash(v: JSValue) u64 {
     return switch (v) {
-        .@"undefined" => 0x1,
-        .@"null" => 0x2,
+        .undefined => 0x1,
+        .null => 0x2,
         .boolean => |b| if (b) @as(u64, 0x3) else @as(u64, 0x4),
         .number => |n| zarray.equality.hash(f64, n),
         .string => |box| zarray.equality.hash([]const u8, box.value.data),
