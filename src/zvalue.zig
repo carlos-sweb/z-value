@@ -220,6 +220,17 @@ pub const JSValue = union(enum) {
         return .{ .array_buffer = try Rc(ArrayBuffer).create(allocator, buf) };
     }
 
+    /// Same storage as `newArrayBuffer` -- this engine has no real
+    /// cross-agent memory model, so `SharedArrayBuffer` is `ArrayBuffer`
+    /// plus `is_shared` for prototype dispatch (see
+    /// atomics-sharedarraybuffer.md). Still one JSValue tag,
+    /// `.array_buffer`.
+    pub fn newSharedArrayBuffer(allocator: Allocator, byte_length: usize) ZValueError!JSValue {
+        var buf = try ArrayBuffer.init(allocator, byte_length);
+        buf.is_shared = true;
+        return .{ .array_buffer = try Rc(ArrayBuffer).create(allocator, buf) };
+    }
+
     /// `owner` must be a `.array_buffer` JSValue -- asserts, doesn't
     /// return an error, since this is an internal-invariant violation
     /// (the caller, not a JS-facing API, is responsible for validating
