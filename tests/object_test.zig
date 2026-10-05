@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const JSValue = @import("zvalue").JSValue;
+const FailingAllocator = std.testing.FailingAllocator;
 
 test "object: set value types, deinit frees the object" {
     var obj = try JSValue.newObject(testing.allocator);
@@ -59,4 +60,34 @@ test "known gap: prototype is not reference-counted (documented, not asserted sa
     // contract, not a safety guarantee.
     child.deinit();
     proto.deinit();
+}
+
+test "cloneObject: OOM mid-copy leaks nothing and leaves the source intact" {
+    // Values already copied are released when a later set() fails.
+    // Same k-sweep as the constructor OOM tests, but only the clone's own
+    // allocations fail: the source must come out untouched (its deinit
+    // below must free everything, with no over- or under-retained child).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        const src = try JSValue.newObject(a);
+        try src.object.value.set("a", try JSValue.newString(a, "a"));
+        try src.object.value.set("b", try JSValue.newString(a, "b"));
+        try src.object.value.set("c", try JSValue.newString(a, "c"));
+        try src.object.value.set("d", try JSValue.newString(a, "d"));
+        try src.object.value.set("e", try JSValue.newString(a, "e"));
+        fa.fail_index = fa.alloc_index + k;
+        const c = src.cloneObject() catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            src.deinit();
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        c.deinit();
+        src.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0);
+        break;
+    }
 }

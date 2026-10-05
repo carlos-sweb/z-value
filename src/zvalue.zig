@@ -101,7 +101,8 @@ pub const JSValue = union(enum) {
         // borrowed ZString's deinit() is a no-op, which would silently break
         // the Rc(T) refcounting contract (the box would "free" without
         // actually freeing anything).
-        const str = try ZString.initOwned(allocator, content);
+        var str = try ZString.initOwned(allocator, content);
+        errdefer str.deinit();
         return .{ .string = try Rc(ZString).create(allocator, str) };
     }
 
@@ -116,8 +117,10 @@ pub const JSValue = union(enum) {
     }
 
     /// Takes ownership of an already-compiled Regex (e.g. from
-    /// `zregex.Regex.compile()`).
+    /// `zregex.Regex.compile()`) -- including on failure: if the box
+    /// can't be allocated, `re` is released here, never by the caller.
     pub fn fromRegex(allocator: Allocator, re: Regex) ZValueError!JSValue {
+        errdefer re.deinit();
         return .{ .regex = try Rc(Regex).create(allocator, re) };
     }
 
@@ -127,7 +130,8 @@ pub const JSValue = union(enum) {
     /// ZSymbol.init() (a value, not create()'s own heap allocation) since
     /// the Rc box itself is the symbol's one true heap allocation.
     pub fn newSymbol(allocator: Allocator, description: ?[]const u8) ZValueError!JSValue {
-        const sym = try ZSymbol.init(allocator, description);
+        var sym = try ZSymbol.init(allocator, description);
+        errdefer sym.deinit();
         return .{ .symbol = try Rc(ZSymbol).create(allocator, sym) };
     }
 
@@ -147,7 +151,8 @@ pub const JSValue = union(enum) {
     /// matching), same rationale as symbol/map/set each getting their own
     /// variant instead of being represented as plain `.object` values.
     pub fn newError(allocator: Allocator, kind: ErrorKind, message: []const u8) ZValueError!JSValue {
-        const err = try ZError(JSValue).init(allocator, kind, message);
+        var err = try ZError(JSValue).init(allocator, kind, message);
+        errdefer err.deinit();
         return .{ .@"error" = try Rc(ZError(JSValue)).create(allocator, err) };
     }
 
@@ -157,16 +162,24 @@ pub const JSValue = union(enum) {
     /// OWNERSHIP RULE at the top of this file). If you still need your own
     /// copy of a value after this call, retain() it yourself first:
     /// `newAggregateError(alloc, "msg", &.{ a.retain(), b.retain() })`.
+    /// Ownership of `errs`' elements is taken even on failure (same as
+    /// `newDataView`'s `owner`): they are released here if this errors.
     pub fn newAggregateError(allocator: Allocator, message: []const u8, errs: []const JSValue) ZValueError!JSValue {
-        const err = try ZError(JSValue).initAggregate(allocator, message, errs);
+        errdefer for (errs) |e| e.deinit();
+        var err = try ZError(JSValue).initAggregate(allocator, message, errs);
+        errdefer err.deinit();
         return .{ .@"error" = try Rc(ZError(JSValue)).create(allocator, err) };
     }
 
     /// Wraps a native or user-defined `Callable` (see callable.zig) as a
     /// JSValue -- functions are first-class values in JS: they can be
     /// stored in variables/properties/arrays and compared by identity.
+    /// Takes ownership of `callable` (its `prototype`/`statics`, if set)
+    /// even on failure -- released here if the box can't be allocated.
     pub fn newFunction(allocator: Allocator, callable: Callable) ZValueError!JSValue {
-        return .{ .function = try Rc(Callable).create(allocator, callable) };
+        var owned = callable;
+        errdefer owned.deinit();
+        return .{ .function = try Rc(Callable).create(allocator, owned) };
     }
 
     /// A Date from milliseconds since the Unix epoch. Out-of-range values
@@ -194,7 +207,8 @@ pub const JSValue = union(enum) {
     /// (see z-bigint's `ZBigInt.fromDigitText` for the accepted grammar:
     /// optional `0x`/`0o`/`0b` prefix, `_` separators, optional sign).
     pub fn newBigInt(allocator: Allocator, raw_digit_text: []const u8) BigIntError!JSValue {
-        const v = try ZBigInt.fromDigitText(allocator, raw_digit_text);
+        var v = try ZBigInt.fromDigitText(allocator, raw_digit_text);
+        errdefer v.deinit();
         return .{ .bigint = try Rc(ZBigInt).create(allocator, v) };
     }
 
@@ -202,21 +216,31 @@ pub const JSValue = union(enum) {
     /// `ZBigInt.add`/`.mul`/etc.) -- unlike `newBigInt`, does not parse
     /// digit text. Takes ownership of `v` (matching `newDate`/`newSymbol`'s
     /// "box whatever you're handed" convention for freshly-constructed
-    /// values with no other owner yet).
+    /// values with no other owner yet) -- including on failure: `v` is
+    /// released here if the box can't be allocated.
     pub fn newBigIntFromValue(allocator: Allocator, v: ZBigInt) ZValueError!JSValue {
-        return .{ .bigint = try Rc(ZBigInt).create(allocator, v) };
+        var owned = v;
+        errdefer owned.deinit();
+        return .{ .bigint = try Rc(ZBigInt).create(allocator, owned) };
     }
 
     /// Does NOT retain `target`/`handler` for you (see proxy.zig's doc
-    /// comment) -- same convention as `newAggregateError`'s `errs`.
+    /// comment) -- same convention as `newAggregateError`'s `errs`. Like
+    /// `newDataView`, ownership is taken even on failure: both are
+    /// released here if the box can't be allocated.
     pub fn newProxy(allocator: Allocator, target: JSValue, handler: JSValue) ZValueError!JSValue {
+        errdefer {
+            target.deinit();
+            handler.deinit();
+        }
         return .{ .proxy = try Rc(Proxy).create(allocator, .{ .target = target, .handler = handler }) };
     }
 
     /// Allocates a new zero-initialized `ArrayBuffer` of `byte_length`
     /// bytes.
     pub fn newArrayBuffer(allocator: Allocator, byte_length: usize) ZValueError!JSValue {
-        const buf = try ArrayBuffer.init(allocator, byte_length);
+        var buf = try ArrayBuffer.init(allocator, byte_length);
+        errdefer buf.deinit();
         return .{ .array_buffer = try Rc(ArrayBuffer).create(allocator, buf) };
     }
 
@@ -227,6 +251,7 @@ pub const JSValue = union(enum) {
     /// `.array_buffer`.
     pub fn newSharedArrayBuffer(allocator: Allocator, byte_length: usize) ZValueError!JSValue {
         var buf = try ArrayBuffer.init(allocator, byte_length);
+        errdefer buf.deinit();
         buf.is_shared = true;
         return .{ .array_buffer = try Rc(ArrayBuffer).create(allocator, buf) };
     }
@@ -542,8 +567,11 @@ pub const JSValue = union(enum) {
         const box = self.array;
         var new_arr = try box.value.clone();
         errdefer new_arr.deinit();
-        for (new_arr.toSliceMut()) |*child| _ = child.retain();
-        return .{ .array = try Rc(ZArray(JSValue)).create(box.allocator, new_arr) };
+        const new_box = try Rc(ZArray(JSValue)).create(box.allocator, new_arr);
+        // Retain only once nothing below can fail: an earlier retain would
+        // leave every child over-counted if the box allocation failed.
+        for (new_box.value.toSliceMut()) |*child| _ = child.retain();
+        return .{ .array = new_box };
     }
 
     /// Rc-aware duplicate of a `.object` JSValue: retains every property
@@ -553,13 +581,19 @@ pub const JSValue = union(enum) {
     pub fn cloneObject(self: JSValue) !JSValue {
         const box = self.object;
         var new_obj = ZObject(JSValue).init(box.allocator);
-        errdefer new_obj.deinit();
+        // On failure, release every value already copied (each was retained
+        // right after its own successful set()) before freeing the object.
+        errdefer {
+            for (new_obj.properties.values()) |prop| prop.value.deinit();
+            new_obj.deinit();
+        }
 
         const keys = try box.value.keys(box.allocator);
         defer box.allocator.free(keys);
         for (keys) |key| {
             const value = box.value.get(key).?;
-            try new_obj.set(key, value.retain());
+            try new_obj.set(key, value);
+            _ = value.retain();
         }
 
         return .{ .object = try Rc(ZObject(JSValue)).create(box.allocator, new_obj) };
@@ -574,12 +608,19 @@ pub const JSValue = union(enum) {
     pub fn cloneMap(self: JSValue) ZValueError!JSValue {
         const box = self.map;
         var new_map = ZMap(JSValue, JSValue).init(box.allocator);
-        errdefer new_map.deinit();
+        // Same shape as cloneObject(): release what was already copied.
+        errdefer {
+            for (new_map.keys()) |key| key.deinit();
+            for (new_map.values()) |value| value.deinit();
+            new_map.deinit();
+        }
 
         const pairs = try box.value.entries(box.allocator);
         defer box.allocator.free(pairs);
         for (pairs) |pair| {
-            try new_map.set(pair.key.retain(), pair.value.retain());
+            try new_map.set(pair.key, pair.value);
+            _ = pair.key.retain();
+            _ = pair.value.retain();
         }
 
         return .{ .map = try Rc(ZMap(JSValue, JSValue)).create(box.allocator, new_map) };
@@ -589,10 +630,15 @@ pub const JSValue = union(enum) {
     pub fn cloneSet(self: JSValue) ZValueError!JSValue {
         const box = self.set;
         var new_set = ZSet(JSValue).init(box.allocator);
-        errdefer new_set.deinit();
+        // Same shape as cloneObject(): release what was already copied.
+        errdefer {
+            for (new_set.values()) |value| value.deinit();
+            new_set.deinit();
+        }
 
         for (box.value.values()) |value| {
-            try new_set.add(value.retain());
+            try new_set.add(value);
+            _ = value.retain();
         }
 
         return .{ .set = try Rc(ZSet(JSValue)).create(box.allocator, new_set) };
@@ -604,15 +650,16 @@ pub const JSValue = union(enum) {
     /// it does not retain on its own.
     pub fn cloneError(self: JSValue) ZValueError!JSValue {
         const box = self.@"error";
-        var new_err: ZError(JSValue) = undefined;
-        if (box.value.errors) |errs| {
-            const retained = try box.allocator.alloc(JSValue, errs.len);
-            defer box.allocator.free(retained);
-            for (errs, 0..) |e, i| retained[i] = e.retain();
-            new_err = try ZError(JSValue).initAggregate(box.allocator, box.value.message, retained);
-        } else {
-            new_err = try ZError(JSValue).init(box.allocator, box.value.kind, box.value.message);
+        var new_err = if (box.value.errors) |errs|
+            try ZError(JSValue).initAggregate(box.allocator, box.value.message, errs)
+        else
+            try ZError(JSValue).init(box.allocator, box.value.kind, box.value.message);
+        errdefer new_err.deinit();
+        const new_box = try Rc(ZError(JSValue)).create(box.allocator, new_err);
+        // Retain only once nothing below can fail (same as cloneArray()).
+        if (new_box.value.errors) |errs| {
+            for (errs) |e| _ = e.retain();
         }
-        return .{ .@"error" = try Rc(ZError(JSValue)).create(box.allocator, new_err) };
+        return .{ .@"error" = new_box };
     }
 };

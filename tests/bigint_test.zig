@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const zvalue = @import("zvalue");
+const FailingAllocator = std.testing.FailingAllocator;
 const JSValue = zvalue.JSValue;
 
 test "newBigInt parses digit text, typeof is \"bigint\" (its own arm, not folded into \"object\")" {
@@ -66,4 +67,53 @@ test "a bigint is never strictly equal to a number of the same mathematical valu
 
 test "invalid digit text surfaces as a real error, not a crash" {
     try testing.expectError(zvalue.BigIntError.InvalidDigits, JSValue.newBigInt(testing.allocator, "not-a-number"));
+}
+
+test "newBigInt: OOM at any allocation leaks nothing" {
+    // Payload (digit limbs) first, then the Rc box.
+    // Fails z-value's k-th allocation for k = 0, 1, ... until the call
+    // succeeds; every failure must return OutOfMemory with nothing leaked
+    // (testing.allocator also catches double frees, Rc's decref asserts
+    // against underflow).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        fa.fail_index = fa.alloc_index + k;
+        const v = JSValue.newBigInt(a, "123456789012345678901234567890123456789") catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        v.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0); // at least one failure point was exercised
+        break;
+    }
+}
+
+test "newBigIntFromValue: OOM releases the handed-over ZBigInt" {
+    // `v` is owned by the call even when the box allocation fails.
+    // Fails z-value's k-th allocation for k = 0, 1, ... until the call
+    // succeeds; every failure must return OutOfMemory with nothing leaked
+    // (testing.allocator also catches double frees, Rc's decref asserts
+    // against underflow).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        const parsed = try JSValue.newBigInt(a, "-98765432109876543210");
+        const sum = try zvalue.ZBigInt.add(a, parsed.bigint.value, parsed.bigint.value);
+        parsed.deinit();
+        fa.fail_index = fa.alloc_index + k;
+        const v = JSValue.newBigIntFromValue(a, sum) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        v.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0); // at least one failure point was exercised
+        break;
+    }
 }

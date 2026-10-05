@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const JSValue = @import("zvalue").JSValue;
+const FailingAllocator = std.testing.FailingAllocator;
 
 test "map: set/get value types, deinit frees the map" {
     var map = try JSValue.newMap(testing.allocator);
@@ -67,4 +68,34 @@ test "typeof a map is \"object\"" {
     var map = try JSValue.newMap(testing.allocator);
     defer map.deinit();
     try testing.expectEqualStrings("object", map.typeOf());
+}
+
+test "cloneMap: OOM mid-copy leaks nothing and leaves the source intact" {
+    // Keys and values already copied are released when a later set() fails.
+    // Same k-sweep as the constructor OOM tests, but only the clone's own
+    // allocations fail: the source must come out untouched (its deinit
+    // below must free everything, with no over- or under-retained child).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        const src = try JSValue.newMap(a);
+        try src.map.value.set(try JSValue.newString(a, "ka"), try JSValue.newString(a, "va"));
+        try src.map.value.set(try JSValue.newString(a, "kb"), try JSValue.newString(a, "vb"));
+        try src.map.value.set(try JSValue.newString(a, "kc"), try JSValue.newString(a, "vc"));
+        try src.map.value.set(try JSValue.newString(a, "kd"), try JSValue.newString(a, "vd"));
+        try src.map.value.set(try JSValue.newString(a, "ke"), try JSValue.newString(a, "ve"));
+        fa.fail_index = fa.alloc_index + k;
+        const c = src.cloneMap() catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            src.deinit();
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        c.deinit();
+        src.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0);
+        break;
+    }
 }

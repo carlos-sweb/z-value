@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const zvalue = @import("zvalue");
+const FailingAllocator = std.testing.FailingAllocator;
 const JSValue = zvalue.JSValue;
 
 fn dummyCall(ctx: *anyopaque, allocator: std.mem.Allocator, this_value: JSValue, args: []const JSValue) anyerror!JSValue {
@@ -60,4 +61,29 @@ test "two distinct function values are never strictly equal, even with identical
     defer f2.deinit();
     try testing.expect(!zvalue.equality.strictEquals(f1, f2));
     try testing.expect(zvalue.equality.strictEquals(f1, f1));
+}
+
+test "newFunction: OOM releases the handed-over prototype" {
+    // The Callable (and its prototype/statics) is owned by the call even on failure.
+    // Fails z-value's k-th allocation for k = 0, 1, ... until the call
+    // succeeds; every failure must return OutOfMemory with nothing leaked
+    // (testing.allocator also catches double frees, Rc's decref asserts
+    // against underflow).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        var dummy_ctx: u8 = 0;
+        const proto = try JSValue.newObject(a);
+        fa.fail_index = fa.alloc_index + k;
+        const v = JSValue.newFunction(a, .{ .ctx = &dummy_ctx, .call = dummyCall, .prototype = proto }) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        v.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0); // at least one failure point was exercised
+        break;
+    }
 }

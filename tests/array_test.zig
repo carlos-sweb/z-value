@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const JSValue = @import("zvalue").JSValue;
+const FailingAllocator = std.testing.FailingAllocator;
 
 test "array: push value types, deinit frees the array" {
     var arr = try JSValue.newArray(testing.allocator);
@@ -66,4 +67,31 @@ test "reference cycle leaks by design (documented, not a bug to fix here)" {
     const self_ref = a.array.value.pop().?;
     self_ref.deinit();
     a.deinit();
+}
+
+test "cloneArray: OOM leaks nothing and leaves the source intact" {
+    // Children are retained only once the clone can no longer fail.
+    // Same k-sweep as the constructor OOM tests, but only the clone's own
+    // allocations fail: the source must come out untouched (its deinit
+    // below must free everything, with no over- or under-retained child).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        const src = try JSValue.newArray(a);
+        _ = try src.array.value.push(try JSValue.newString(a, "x"));
+        _ = try src.array.value.push(try JSValue.newString(a, "y"));
+        fa.fail_index = fa.alloc_index + k;
+        const c = src.cloneArray() catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            src.deinit();
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        c.deinit();
+        src.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0);
+        break;
+    }
 }
