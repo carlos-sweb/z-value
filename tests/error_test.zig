@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const zvalue = @import("zvalue");
+const FailingAllocator = std.testing.FailingAllocator;
 const JSValue = zvalue.JSValue;
 const ErrorKind = zvalue.ErrorKind;
 
@@ -93,4 +94,102 @@ test "error: strict equality compares by box identity, not content" {
 
     try testing.expect(!zvalue.equality.strictEquals(a, b));
     try testing.expect(zvalue.equality.strictEquals(a, a));
+}
+
+test "newError: OOM at any allocation leaks nothing" {
+    // Payload (message copy) first, then the Rc box.
+    // Fails z-value's k-th allocation for k = 0, 1, ... until the call
+    // succeeds; every failure must return OutOfMemory with nothing leaked
+    // (testing.allocator also catches double frees, Rc's decref asserts
+    // against underflow).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        fa.fail_index = fa.alloc_index + k;
+        const v = JSValue.newError(a, .type_error, "boom") catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        v.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0); // at least one failure point was exercised
+        break;
+    }
+}
+
+test "newAggregateError: OOM releases the handed-over errs too" {
+    // errs' ownership is taken even on failure (same as newDataView's owner).
+    // Fails z-value's k-th allocation for k = 0, 1, ... until the call
+    // succeeds; every failure must return OutOfMemory with nothing leaked
+    // (testing.allocator also catches double frees, Rc's decref asserts
+    // against underflow).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        const e1 = try JSValue.newString(a, "e1");
+        const e2 = try JSValue.newString(a, "e2");
+        fa.fail_index = fa.alloc_index + k;
+        const v = JSValue.newAggregateError(a, "agg", &.{ e1, e2 }) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        v.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0); // at least one failure point was exercised
+        break;
+    }
+}
+
+test "cloneError: OOM on a plain error leaks nothing" {
+    // Message copy, then the Rc box.
+    // Same k-sweep as the constructor OOM tests, but only the clone's own
+    // allocations fail: the source must come out untouched (its deinit
+    // below must free everything, with no over- or under-retained child).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        const src = try JSValue.newError(a, .range_error, "bad");
+        fa.fail_index = fa.alloc_index + k;
+        const c = src.cloneError() catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            src.deinit();
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        c.deinit();
+        src.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0);
+        break;
+    }
+}
+
+test "cloneError: OOM on an AggregateError leaks nothing and leaves the source intact" {
+    // Message + errors slice copies, then the Rc box; nested values retained only on success.
+    // Same k-sweep as the constructor OOM tests, but only the clone's own
+    // allocations fail: the source must come out untouched (its deinit
+    // below must free everything, with no over- or under-retained child).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        const src = try JSValue.newAggregateError(a, "agg", &.{ try JSValue.newString(a, "e1"), try JSValue.newString(a, "e2") });
+        fa.fail_index = fa.alloc_index + k;
+        const c = src.cloneError() catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            src.deinit();
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        c.deinit();
+        src.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0);
+        break;
+    }
 }

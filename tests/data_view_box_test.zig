@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const zvalue = @import("zvalue");
+const FailingAllocator = std.testing.FailingAllocator;
 const JSValue = zvalue.JSValue;
 
 test "typeof ArrayBuffer/DataView is object" {
@@ -54,4 +55,50 @@ test "a DataView with an out-of-range window is a real error, not a crash" {
     const buf = try JSValue.newArrayBuffer(testing.allocator, 4);
     defer buf.deinit();
     try testing.expectError(error.OutOfBounds, JSValue.newDataView(testing.allocator, buf.retain(), 2, 4));
+}
+
+test "newArrayBuffer: OOM at any allocation leaks nothing" {
+    // Payload (byte storage) first, then the Rc box.
+    // Fails z-value's k-th allocation for k = 0, 1, ... until the call
+    // succeeds; every failure must return OutOfMemory with nothing leaked
+    // (testing.allocator also catches double frees, Rc's decref asserts
+    // against underflow).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        fa.fail_index = fa.alloc_index + k;
+        const v = JSValue.newArrayBuffer(a, 64) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        v.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0); // at least one failure point was exercised
+        break;
+    }
+}
+
+test "newSharedArrayBuffer: OOM at any allocation leaks nothing" {
+    // Same shape as newArrayBuffer.
+    // Fails z-value's k-th allocation for k = 0, 1, ... until the call
+    // succeeds; every failure must return OutOfMemory with nothing leaked
+    // (testing.allocator also catches double frees, Rc's decref asserts
+    // against underflow).
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        var fa = FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        fa.fail_index = fa.alloc_index + k;
+        const v = JSValue.newSharedArrayBuffer(a, 64) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+            continue;
+        };
+        v.deinit();
+        try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+        try testing.expect(k > 0); // at least one failure point was exercised
+        break;
+    }
 }
