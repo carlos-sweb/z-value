@@ -193,3 +193,11 @@ test "cloneError: OOM on an AggregateError leaks nothing and leaves the source i
         break;
     }
 }
+
+test "error: releasing a 100 000-deep AggregateError chain does not overflow the stack" {
+    var cur = JSValue.NULL;
+    for (0..100_000) |_| {
+        cur = try JSValue.newAggregateError(testing.allocator, "e", &.{cur});
+    }
+    cur.deinit();
+}

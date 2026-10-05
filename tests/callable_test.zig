@@ -87,3 +87,15 @@ test "newFunction: OOM releases the handed-over prototype" {
         break;
     }
 }
+
+test "function: releasing a 100 000-deep prototype chain does not overflow the stack" {
+    var dummy_ctx: u8 = 0;
+    var cur = JSValue.NULL;
+    for (0..100_000) |i| {
+        cur = if (i % 2 == 0)
+            try JSValue.newFunction(testing.allocator, .{ .ctx = &dummy_ctx, .call = dummyCall, .prototype = cur })
+        else
+            try JSValue.newFunction(testing.allocator, .{ .ctx = &dummy_ctx, .call = dummyCall, .statics = cur });
+    }
+    cur.deinit();
+}

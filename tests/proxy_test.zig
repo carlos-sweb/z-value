@@ -103,3 +103,14 @@ test "newProxy: OOM releases the handed-over target and handler" {
         break;
     }
 }
+
+test "proxy: releasing a 100 000-deep proxy chain does not overflow the stack" {
+    var cur = try JSValue.newObject(testing.allocator);
+    for (0..100_000) |i| {
+        cur = if (i % 2 == 0)
+            try JSValue.newProxy(testing.allocator, cur, JSValue.UNDEFINED)
+        else
+            try JSValue.newProxy(testing.allocator, JSValue.UNDEFINED, cur);
+    }
+    cur.deinit();
+}

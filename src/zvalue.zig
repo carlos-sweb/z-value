@@ -401,8 +401,13 @@ pub const JSValue = union(enum) {
     }
 
     /// Releases this reference. When the underlying box's refcount reaches
-    /// zero, tears down the wrapped value (recursively releasing any nested
-    /// JSValues first) and frees the box.
+    /// zero, tears down the wrapped value (releasing any nested JSValues
+    /// first) and frees the box.
+    ///
+    /// Iterative, not recursive: nesting depth costs no native stack, so a
+    /// 100 000-deep `a = [a]` chain is released as safely as a flat one.
+    /// It also never allocates (see `PendingRelease`), so releasing memory
+    /// can never fail for lack of memory.
     ///
     /// KNOWN GAP: ZObject(JSValue).prototype is a raw `?*Self` inherited from
     /// z-object with no lifetime management of its own — it is not retained
@@ -415,145 +420,143 @@ pub const JSValue = union(enum) {
     /// refers back to itself) never reach refcount zero and leak by design —
     /// there is no cycle collector in this version.
     pub fn deinit(self: JSValue) void {
-        switch (self) {
-            .undefined, .null, .boolean, .number => {},
-            .string => |box| {
-                if (box.decref()) {
+        var pending: PendingRelease = .{};
+        self.releaseInto(&pending);
+        pending.drain();
+    }
+
+    /// Container boxes whose refcount just reached zero but whose children
+    /// have not been released yet: one intrusive singly-linked list per
+    /// container type. The link lives in the box's own `count` field, which
+    /// is dead once it reaches zero (nothing reads it again before
+    /// `destroy()`), so queueing a box needs no memory at all -- and each
+    /// list being homogeneous means no type tag has to be stored alongside
+    /// the link. The list heads are the only state, and they live on the
+    /// stack of `deinit()`.
+    ///
+    /// Only types that can nest arbitrarily deep are queued. Leaves (no
+    /// nested JSValues) are torn down on the spot, and views (`data_view`,
+    /// `typed_array`) release their single owner into the lists and are torn
+    /// down on the spot too.
+    const PendingRelease = struct {
+        array: ?*Rc(ZArray(JSValue)) = null,
+        object: ?*Rc(ZObject(JSValue)) = null,
+        map: ?*Rc(ZMap(JSValue, JSValue)) = null,
+        set: ?*Rc(ZSet(JSValue)) = null,
+        @"error": ?*Rc(ZError(JSValue)) = null,
+        function: ?*Rc(Callable) = null,
+        promise: ?*Rc(ZPromise(JSValue)) = null,
+        proxy: ?*Rc(Proxy) = null,
+
+        fn push(self: *PendingRelease, comptime tag: []const u8, box: @typeInfo(@FieldType(PendingRelease, tag)).optional.child) void {
+            std.debug.assert(box.count == 0);
+            box.count = if (@field(self, tag)) |head| @intFromPtr(head) else 0;
+            @field(self, tag) = box;
+        }
+
+        fn pop(self: *PendingRelease, comptime tag: []const u8) @FieldType(PendingRelease, tag) {
+            const box = @field(self, tag) orelse return null;
+            @field(self, tag) = if (box.count == 0) null else @ptrFromInt(box.count);
+            box.count = 0;
+            return box;
+        }
+
+        /// Tears down every queued box. Releasing a box's children may
+        /// queue more boxes; the loop runs until every list is empty.
+        ///
+        /// The payload types defined in this repo (`Callable`, `Proxy`,
+        /// `DataViewBox`, `TypedArrayBox`) have their own `deinit()` that
+        /// calls `JSValue.deinit()` on their fields; calling it here would
+        /// start a nested release per level and bring the recursion back.
+        /// Their JSValue fields are released into the lists by hand
+        /// instead -- keep these arms in sync with those `deinit()`s.
+        fn drain(self: *PendingRelease) void {
+            while (true) {
+                if (self.pop("array")) |box| {
+                    for (box.value.toSliceMut()) |child| child.releaseInto(self);
                     box.value.deinit();
                     box.destroy();
-                }
-            },
-            .regex => |box| {
-                if (box.decref()) {
-                    box.value.deinit();
-                    box.destroy();
-                }
-            },
-            .array => |box| {
-                if (box.decref()) {
-                    for (box.value.toSliceMut()) |*child| child.deinit();
-                    box.value.deinit();
-                    box.destroy();
-                }
-            },
-            .object => |box| {
-                if (box.decref()) {
+                } else if (self.pop("object")) |box| {
                     for (box.value.properties.values()) |prop| {
-                        prop.value.deinit();
-                        if (prop.getter) |g| g.deinit();
-                        if (prop.setter) |s| s.deinit();
+                        prop.value.releaseInto(self);
+                        if (prop.getter) |g| g.releaseInto(self);
+                        if (prop.setter) |st| st.releaseInto(self);
                     }
                     box.value.deinit();
                     box.destroy();
-                }
-            },
-            .symbol => |box| {
-                if (box.decref()) {
-                    box.value.deinit();
-                    box.destroy();
-                }
-            },
-            .map => |box| {
-                if (box.decref()) {
+                } else if (self.pop("map")) |box| {
                     // Unlike ZObject (String-keyed), Map keys are arbitrary
                     // JSValues too — both sides need releasing.
-                    for (box.value.keys()) |*key| key.deinit();
-                    for (box.value.values()) |*value| value.deinit();
+                    for (box.value.keys()) |key| key.releaseInto(self);
+                    for (box.value.values()) |value| value.releaseInto(self);
                     box.value.deinit();
                     box.destroy();
-                }
-            },
-            .set => |box| {
-                if (box.decref()) {
-                    for (box.value.values()) |*value| value.deinit();
+                } else if (self.pop("set")) |box| {
+                    for (box.value.values()) |value| value.releaseInto(self);
                     box.value.deinit();
                     box.destroy();
-                }
-            },
-            .@"error" => |box| {
-                if (box.decref()) {
+                } else if (self.pop("error")) |box| {
                     // AggregateError's errors slice holds JSValues too (only
-                    // non-null for .aggregate_error; a no-op loop otherwise).
+                    // non-null for .aggregate_error).
                     if (box.value.errors) |errs| {
-                        for (errs) |*e| e.deinit();
+                        for (errs) |e| e.releaseInto(self);
                     }
                     box.value.deinit();
                     box.destroy();
-                }
-            },
-            .function => |box| {
-                if (box.decref()) {
-                    box.value.deinit();
+                } else if (self.pop("function")) |box| {
+                    // Same fields Callable.deinit() releases.
+                    if (box.value.prototype) |p| p.releaseInto(self);
+                    if (box.value.statics) |st| st.releaseInto(self);
                     box.destroy();
-                }
-            },
-            // ZDate is a pure 8-byte value (no allocator stored, no
-            // deinit of its own) -- only the Rc box itself needs freeing.
-            .date => |box| {
-                if (box.decref()) {
-                    box.destroy();
-                }
-            },
-            // Every z-temporal type is a pure value too (see
-            // TemporalValue's doc comment) -- same shape as .date.
-            .temporal => |box| {
-                if (box.decref()) {
-                    box.destroy();
-                }
-            },
-            .promise => |box| {
-                if (box.decref()) {
+                } else if (self.pop("promise")) |box| {
                     // The settled result and every handler/derived in
                     // still-pending reactions are JSValues this box owns.
-                    if (box.value.result) |r| r.deinit();
+                    if (box.value.result) |r| r.releaseInto(self);
                     for (box.value.reactions.items) |reaction| {
-                        if (reaction.on_fulfilled) |h| h.deinit();
-                        if (reaction.on_rejected) |h| h.deinit();
-                        if (reaction.derived) |d| d.deinit();
+                        if (reaction.on_fulfilled) |h| h.releaseInto(self);
+                        if (reaction.on_rejected) |h| h.releaseInto(self);
+                        if (reaction.derived) |d| d.releaseInto(self);
                     }
                     box.value.deinit(box.allocator);
                     box.destroy();
-                }
-            },
-            // Unlike ZDate, ZBigInt owns real heap storage (its digit
-            // limbs) -- follows Symbol's deinit shape, not Date's.
-            .bigint => |box| {
+                } else if (self.pop("proxy")) |box| {
+                    // Same fields Proxy.deinit() releases.
+                    box.value.target.releaseInto(self);
+                    box.value.handler.releaseInto(self);
+                    box.destroy();
+                } else break;
+            }
+        }
+    };
+
+    /// Drops one reference. A box that reaches zero is either torn down on
+    /// the spot (leaves and views: bounded work, no recursion beyond one
+    /// view -> owner step) or queued on `pending` (containers).
+    fn releaseInto(self: JSValue, pending: *PendingRelease) void {
+        switch (self) {
+            .undefined, .null, .boolean, .number => {},
+            // Leaves that own heap storage of their own.
+            inline .string, .regex, .symbol, .bigint, .array_buffer => |box| {
                 if (box.decref()) {
                     box.value.deinit();
                     box.destroy();
                 }
             },
-            .proxy => |box| {
+            // Pure values (ZDate, every z-temporal type) -- only the box
+            // itself needs freeing.
+            inline .date, .temporal => |box| {
+                if (box.decref()) box.destroy();
+            },
+            // Views own no bytes of their own, only their `.array_buffer`
+            // owner (same field DataViewBox/TypedArrayBox.deinit() release).
+            inline .data_view, .typed_array => |box| {
                 if (box.decref()) {
-                    box.value.deinit();
+                    box.value.owner.releaseInto(pending);
                     box.destroy();
                 }
             },
-            // ArrayBuffer owns real heap storage (its byte allocation) --
-            // follows Symbol/BigInt's deinit shape, not Date's bare-value
-            // one.
-            .array_buffer => |box| {
-                if (box.decref()) {
-                    box.value.deinit();
-                    box.destroy();
-                }
-            },
-            // DataView owns no bytes of its own -- only releases the
-            // `.array_buffer` JSValue it reads/writes through (matching
-            // Proxy's target/handler convention).
-            .data_view => |box| {
-                if (box.decref()) {
-                    box.value.deinit();
-                    box.destroy();
-                }
-            },
-            // Owns no bytes of its own -- only releases the `.array_buffer`
-            // JSValue it reads/writes through, same shape as `.data_view`.
-            .typed_array => |box| {
-                if (box.decref()) {
-                    box.value.deinit();
-                    box.destroy();
-                }
+            inline .array, .object, .map, .set, .@"error", .function, .promise, .proxy => |box, tag| {
+                if (box.decref()) pending.push(@tagName(tag), box);
             },
         }
     }

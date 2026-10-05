@@ -71,3 +71,29 @@ test "newString: OOM at any allocation leaks nothing" {
         break;
     }
 }
+
+const HookCounter = struct {
+    destroyed: usize = 0,
+    fn hook(ctx: *anyopaque, box: *anyopaque) void {
+        _ = box;
+        const self: *HookCounter = @ptrCast(@alignCast(ctx));
+        self.destroyed += 1;
+    }
+};
+
+test "GC hook still fires exactly once per box during an iterative release" {
+    var counter: HookCounter = .{};
+    var cur = JSValue.NULL;
+    const depth = 10_000;
+    for (0..depth) |_| {
+        const outer = try JSValue.newArray(testing.allocator);
+        outer.setGcHook(&counter, HookCounter.hook);
+        _ = try outer.array.value.push(cur);
+        const leaf = try JSValue.newString(testing.allocator, "x");
+        leaf.setGcHook(&counter, HookCounter.hook);
+        _ = try outer.array.value.push(leaf);
+        cur = outer;
+    }
+    cur.deinit();
+    try testing.expectEqual(@as(usize, 2 * depth), counter.destroyed);
+}

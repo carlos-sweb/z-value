@@ -99,3 +99,17 @@ test "cloneMap: OOM mid-copy leaks nothing and leaves the source intact" {
         break;
     }
 }
+
+test "map: releasing a 100 000-deep chain (map as key and as value) does not overflow the stack" {
+    var cur = JSValue.NULL;
+    for (0..100_000) |i| {
+        const outer = try JSValue.newMap(testing.allocator);
+        if (i % 2 == 0) {
+            try outer.map.value.set(cur, JSValue.UNDEFINED);
+        } else {
+            try outer.map.value.set(JSValue.fromNumber(0), cur);
+        }
+        cur = outer;
+    }
+    cur.deinit();
+}

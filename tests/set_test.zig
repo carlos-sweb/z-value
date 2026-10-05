@@ -89,3 +89,13 @@ test "cloneSet: OOM mid-copy leaks nothing and leaves the source intact" {
         break;
     }
 }
+
+test "set: releasing a 100 000-deep nested set does not overflow the stack" {
+    var cur = JSValue.NULL;
+    for (0..100_000) |_| {
+        const outer = try JSValue.newSet(testing.allocator);
+        try outer.set.value.add(cur);
+        cur = outer;
+    }
+    cur.deinit();
+}

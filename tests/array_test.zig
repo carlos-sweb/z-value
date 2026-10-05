@@ -95,3 +95,15 @@ test "cloneArray: OOM leaks nothing and leaves the source intact" {
         break;
     }
 }
+
+test "array: releasing a 100 000-deep nested array does not overflow the stack" {
+    // `a = [a]` in a loop: the recursive deinit used to overflow an 8 MiB
+    // stack at ~12 500 levels (Debug) / ~41 000 (ReleaseFast).
+    var cur = JSValue.NULL;
+    for (0..100_000) |_| {
+        const outer = try JSValue.newArray(testing.allocator);
+        _ = try outer.array.value.push(cur);
+        cur = outer;
+    }
+    cur.deinit();
+}
