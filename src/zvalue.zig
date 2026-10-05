@@ -256,17 +256,17 @@ pub const JSValue = union(enum) {
         return .{ .array_buffer = try Rc(ArrayBuffer).create(allocator, buf) };
     }
 
-    /// `owner` must be a `.array_buffer` JSValue -- asserts, doesn't
-    /// return an error, since this is an internal-invariant violation
-    /// (the caller, not a JS-facing API, is responsible for validating
-    /// the argument is really an ArrayBuffer before reaching here; the
-    /// wiring layer's own constructor does that validation and throws a
-    /// real JS TypeError before ever calling this).
+    /// Precondition: `owner` must be `.array_buffer`. If it is not, the
+    /// process aborts with a clear message, in every build mode -- this is
+    /// a caller bug, not JS-facing input (z-interpreter validates the
+    /// argument and throws a real JS TypeError before calling), so it is
+    /// not part of the error set.
     ///
     /// Does NOT retain `owner` for you (same convention as `newProxy`'s
     /// `target`/`handler`) -- the caller must `.retain()` it first if it
     /// still needs its own reference afterward.
     pub fn newDataView(allocator: Allocator, owner: JSValue, byte_offset: usize, byte_length: ?usize) BufferError!JSValue {
+        owner.requireTag(.array_buffer, "newDataView: owner must be .array_buffer");
         // `owner` is already a retained reference handed off by the
         // caller -- on any error below, nothing else will ever release
         // it, so this function must.
@@ -286,7 +286,11 @@ pub const JSValue = union(enum) {
     /// `.len` is what actually gets stored; `TypedArrayBox` keeps the
     /// raw offset/len/kind and reconstructs a view on demand per access,
     /// since `kind` is a runtime tag and `T` isn't known until then.
+    ///
+    /// Precondition: `owner` must be `.array_buffer`. If it is not, the
+    /// process aborts with a clear message (same as `newDataView`).
     pub fn newTypedArray(allocator: Allocator, owner: JSValue, byte_offset: usize, len: ?usize, kind: TypedKind) BufferError!JSValue {
+        owner.requireTag(.array_buffer, "newTypedArray: owner must be .array_buffer");
         errdefer owner.deinit();
         const box = owner.array_buffer;
         const resolved_len: usize = switch (kind) {
@@ -302,6 +306,15 @@ pub const JSValue = union(enum) {
             .u64 => (try zbuffer.TypedArrayView(u64).init(&box.value, byte_offset, len)).len,
         };
         return .{ .typed_array = try Rc(TypedArrayBox).create(allocator, .{ .owner = owner, .byte_offset = byte_offset, .len = resolved_len, .kind = kind }) };
+    }
+
+    /// Aborts the process with `<context>, got .<actual tag>` unless `self`
+    /// holds `expected`. Used for caller-bug preconditions (never for
+    /// JS-facing input): `std.debug.panic` stays active in every build mode,
+    /// so a wrong variant is a deterministic abort instead of reading
+    /// another variant's payload (undefined behavior in ReleaseFast).
+    fn requireTag(self: JSValue, comptime expected: std.meta.Tag(JSValue), comptime context: []const u8) void {
+        if (self != expected) std.debug.panic(context ++ ", got .{s}", .{@tagName(self)});
     }
 
     /// ECMAScript `typeof` operator. Note the famous spec quirk:
@@ -566,7 +579,11 @@ pub const JSValue = union(enum) {
     /// directly on `T = JSValue`), this retains every child element so the
     /// two arrays can each be independently deinit()'d without double-freeing
     /// shared children.
+    ///
+    /// Precondition: `self` must be `.array`. If it is not, the process
+    /// aborts with a clear message, in every build mode.
     pub fn cloneArray(self: JSValue) ZValueError!JSValue {
+        self.requireTag(.array, "cloneArray: expected .array");
         const box = self.array;
         var new_arr = try box.value.clone();
         errdefer new_arr.deinit();
@@ -581,7 +598,11 @@ pub const JSValue = union(enum) {
     /// value, analogous to cloneArray(). Does NOT copy the prototype pointer
     /// (see the KNOWN GAP note on deinit()) beyond whatever raw pointer copy
     /// ZObject's own property storage performs.
+    ///
+    /// Precondition: `self` must be `.object`. If it is not, the process
+    /// aborts with a clear message, in every build mode.
     pub fn cloneObject(self: JSValue) !JSValue {
+        self.requireTag(.object, "cloneObject: expected .object");
         const box = self.object;
         var new_obj = ZObject(JSValue).init(box.allocator);
         // On failure, release every value already copied (each was retained
@@ -608,7 +629,11 @@ pub const JSValue = union(enum) {
     /// clone()/shallow-copy method to accidentally misuse directly, unlike
     /// ZArray/ZObject — but this still keeps the same Rc-aware-duplicate
     /// naming convention for consistency.
+    ///
+    /// Precondition: `self` must be `.map`. If it is not, the process
+    /// aborts with a clear message, in every build mode.
     pub fn cloneMap(self: JSValue) ZValueError!JSValue {
+        self.requireTag(.map, "cloneMap: expected .map");
         const box = self.map;
         var new_map = ZMap(JSValue, JSValue).init(box.allocator);
         // Same shape as cloneObject(): release what was already copied.
@@ -630,7 +655,11 @@ pub const JSValue = union(enum) {
     }
 
     /// Rc-aware duplicate of a `.set` JSValue: retains every value.
+    ///
+    /// Precondition: `self` must be `.set`. If it is not, the process
+    /// aborts with a clear message, in every build mode.
     pub fn cloneSet(self: JSValue) ZValueError!JSValue {
+        self.requireTag(.set, "cloneSet: expected .set");
         const box = self.set;
         var new_set = ZSet(JSValue).init(box.allocator);
         // Same shape as cloneObject(): release what was already copied.
@@ -651,7 +680,11 @@ pub const JSValue = union(enum) {
     /// every JSValue in `errors` (analogous to cloneArray()/cloneSet()) —
     /// ZError(JSValue).initAggregate() only byte-copies the slice it's given,
     /// it does not retain on its own.
+    ///
+    /// Precondition: `self` must be `.error`. If it is not, the process
+    /// aborts with a clear message, in every build mode.
     pub fn cloneError(self: JSValue) ZValueError!JSValue {
+        self.requireTag(.@"error", "cloneError: expected .error");
         const box = self.@"error";
         var new_err = if (box.value.errors) |errs|
             try ZError(JSValue).initAggregate(box.allocator, box.value.message, errs)

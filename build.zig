@@ -67,5 +67,36 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_unit_tests.step);
     }
 
+    // Precondition panics (wrong union tag passed to a constructor/clone):
+    // one process per case, which must abort with SIGABRT and print the
+    // exact message -- a panic cannot be caught inside a unit test.
+    const tag_panic_cases = [_]struct { []const u8, []const u8 }{
+        .{ "newDataView", "newDataView: owner must be .array_buffer, got .object" },
+        .{ "newTypedArray", "newTypedArray: owner must be .array_buffer, got .object" },
+        .{ "cloneArray", "cloneArray: expected .array, got .object" },
+        .{ "cloneObject", "cloneObject: expected .object, got .array" },
+        .{ "cloneMap", "cloneMap: expected .map, got .object" },
+        .{ "cloneSet", "cloneSet: expected .set, got .object" },
+        .{ "cloneError", "cloneError: expected .error, got .object" },
+    };
+    inline for (tag_panic_cases) |c| {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "case", c[0]);
+        const exe = b.addExecutable(.{
+            .name = "tag_panic_" ++ c[0],
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tests/tag_panic.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        exe.root_module.addImport("zvalue", zvalue_module);
+        exe.root_module.addOptions("tag_panic_case", opts);
+        const run = b.addRunArtifact(exe);
+        run.addCheck(.{ .expect_term = .{ .signal = .ABRT } });
+        run.expectStdErrMatch(c[1]);
+        test_step.dependOn(&run.step);
+    }
+
     b.default_step = test_step;
 }
