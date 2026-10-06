@@ -322,7 +322,30 @@ pub const JSValue = union(enum) {
     /// are all typeof "object" too — only functions get their own "function"
     /// result, everything else heap-boxed is "object".
     pub fn typeOf(self: JSValue) []const u8 {
-        return switch (self) {
+        // A proxy reports its TARGET's type, not a fixed "object" -- a proxy
+        // wrapping a callable is itself typeof "function". The target chain
+        // is walked with a loop (not recursion), so a 1 000 000-deep
+        // proxy-of-proxy chain costs no native stack.
+        //
+        // `slow` trails `cur` at half speed (Floyd's cycle check, no memory
+        // needed): a chain that loops back on itself can't come from JS (a
+        // Proxy's target is fixed at creation), only from code mutating
+        // `Proxy.target` directly, and it has no final target to report --
+        // abort with a clear message instead of spinning forever.
+        var cur = self;
+        var slow = self;
+        var advance_slow = false;
+        while (cur == .proxy) {
+            cur = cur.proxy.value.target;
+            if (advance_slow) {
+                slow = slow.proxy.value.target;
+                if (cur == .proxy and cur.proxy == slow.proxy) {
+                    std.debug.panic("typeOf: proxy target chain is cyclic", .{});
+                }
+            }
+            advance_slow = !advance_slow;
+        }
+        return switch (cur) {
             .undefined => "undefined",
             .null => "object",
             .boolean => "boolean",
@@ -331,12 +354,7 @@ pub const JSValue = union(enum) {
             .symbol => "symbol",
             .function => "function",
             .bigint => "bigint",
-            // Reports the TARGET's type, not a fixed "object" -- a proxy
-            // wrapping a callable is itself typeof "function". Plain
-            // recursion (not a special "is this transitively callable"
-            // helper): if target is itself a proxy, this naturally
-            // unwraps one layer at a time until it hits a real leaf.
-            .proxy => |box| box.value.target.typeOf(),
+            .proxy => unreachable, // the loop above only exits on a non-proxy
             .array, .object, .regex, .map, .set, .@"error", .date, .promise, .array_buffer, .data_view, .typed_array, .temporal => "object",
         };
     }

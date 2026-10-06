@@ -78,6 +78,7 @@ pub fn build(b: *std.Build) void {
         .{ "cloneMap", "cloneMap: expected .map, got .object" },
         .{ "cloneSet", "cloneSet: expected .set, got .object" },
         .{ "cloneError", "cloneError: expected .error, got .object" },
+        .{ "typeOfCycle", "typeOf: proxy target chain is cyclic" },
     };
     inline for (tag_panic_cases) |c| {
         const opts = b.addOptions();

@@ -1,7 +1,8 @@
 //! Driver for the precondition-panic checks wired in build.zig: each build of
-//! this program calls ONE constructor/clone with a JSValue of the wrong
-//! variant. The test step runs it and requires a SIGABRT plus the exact
-//! panic message on stderr. Panics cannot be caught in-process in Zig 0.16
+//! this program triggers ONE precondition panic (a constructor/clone given
+//! a JSValue of the wrong variant, or typeOf on a cyclic proxy chain). The
+//! test step runs it and requires a SIGABRT plus the exact panic message on
+//! stderr. Panics cannot be caught in-process in Zig 0.16
 //! (there is no `std.testing.expectPanic`), so each case is its own process.
 const std = @import("std");
 const JSValue = @import("zvalue").JSValue;
@@ -25,6 +26,12 @@ pub fn main() !void {
         _ = try wrong.cloneSet();
     } else if (std.mem.eql(u8, case, "cloneError")) {
         _ = try wrong.cloneError();
+    } else if (std.mem.eql(u8, case, "typeOfCycle")) {
+        // A proxy whose target is itself: only reachable by mutating
+        // `Proxy.target` directly (JS fixes a Proxy's target at creation).
+        const p = try JSValue.newProxy(a, try JSValue.newObject(a), JSValue.UNDEFINED);
+        p.proxy.value.target = p;
+        _ = p.typeOf();
     } else unreachable;
     // Reaching this line means the precondition did NOT abort: exit 0,
     // which the build step's SIGABRT check reports as a failure.

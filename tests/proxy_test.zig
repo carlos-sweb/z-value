@@ -114,3 +114,55 @@ test "proxy: releasing a 100 000-deep proxy chain does not overflow the stack" {
     }
     cur.deinit();
 }
+
+fn proxyChain(a: std.mem.Allocator, target: JSValue, depth: usize) !JSValue {
+    var cur = target;
+    for (0..depth) |_| cur = try JSValue.newProxy(a, cur, JSValue.UNDEFINED);
+    return cur;
+}
+
+test "typeof through a 100 000-deep proxy chain reports the final target's type" {
+    var dummy_ctx: u8 = 0;
+    const over_object = try proxyChain(testing.allocator, try JSValue.newObject(testing.allocator), 100_000);
+    defer over_object.deinit();
+    try testing.expectEqualStrings("object", over_object.typeOf());
+
+    const f = try JSValue.newFunction(testing.allocator, .{ .ctx = &dummy_ctx, .call = dummyCall });
+    const over_function = try proxyChain(testing.allocator, f, 100_000);
+    defer over_function.deinit();
+    try testing.expectEqualStrings("function", over_function.typeOf());
+}
+
+test "typeof through a 1 000 000-deep proxy chain (the depth that overflowed the recursive typeOf)" {
+    const a = std.heap.smp_allocator;
+    const chain = try proxyChain(a, try JSValue.newObject(a), 1_000_000);
+    defer chain.deinit();
+    try testing.expectEqualStrings("object", chain.typeOf());
+}
+
+test "typeof of a short proxy chain equals typeof of its final target, for every target kind" {
+    const a = testing.allocator;
+    var dummy_ctx: u8 = 0;
+    const targets = [_]JSValue{
+        JSValue.UNDEFINED,
+        JSValue.NULL,
+        JSValue.fromBool(true),
+        JSValue.fromNumber(1),
+        try JSValue.newString(a, "s"),
+        try JSValue.newSymbol(a, "sym"),
+        try JSValue.newBigInt(a, "1"),
+        try JSValue.newFunction(a, .{ .ctx = &dummy_ctx, .call = dummyCall }),
+        try JSValue.newObject(a),
+        try JSValue.newArray(a),
+        try JSValue.newMap(a),
+        try JSValue.newDate(a, 0),
+    };
+    defer for (targets) |t| t.deinit();
+    for (targets) |t| {
+        for ([_]usize{ 1, 2, 3 }) |depth| {
+            const chain = try proxyChain(a, t.retain(), depth);
+            defer chain.deinit();
+            try testing.expectEqualStrings(t.typeOf(), chain.typeOf());
+        }
+    }
+}
