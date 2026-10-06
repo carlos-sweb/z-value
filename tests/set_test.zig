@@ -99,3 +99,69 @@ test "set: releasing a 100 000-deep nested set does not overflow the stack" {
     }
     cur.deinit();
 }
+
+// ---- Rc-aware mutation wrappers -----------------------------------------
+
+test "setAdd: a new value is stored; an equal value in another box is released" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const s = try JSValue.newSet(a);
+    try s.setAdd(try JSValue.newString(a, "x"));
+    const stored = s.set.value.values()[0];
+    try s.setAdd(try JSValue.newString(a, "x")); // equal, different box: released
+    try testing.expectEqual(@as(usize, 1), s.set.value.size());
+    try testing.expect(s.set.value.values()[0].string == stored.string);
+    s.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}
+
+test "setAdd: the same box keeps its count balanced" {
+    const a = testing.allocator;
+    const s = try JSValue.newSet(a);
+    defer s.deinit();
+    const v = try JSValue.newString(a, "x");
+    try s.setAdd(v);
+    try s.setAdd(v.retain());
+    try testing.expectEqual(@as(usize, 1), v.string.count);
+    try testing.expectEqual(@as(usize, 1), s.set.value.size());
+}
+
+test "setAdd: out of memory consumes the value, nothing leaks" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const s = try JSValue.newSet(a);
+    const v = try JSValue.newString(a, "x");
+    fa.fail_index = fa.alloc_index;
+    try testing.expectError(error.OutOfMemory, s.setAdd(v));
+    fa.fail_index = std.math.maxInt(usize);
+    try testing.expectEqual(@as(usize, 0), s.set.value.size());
+    s.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}
+
+test "setDelete: releases the STORED element; the lookup value is not consumed" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const s = try JSValue.newSet(a);
+    try s.setAdd(try JSValue.newString(a, "x"));
+    const lookup = try JSValue.newString(a, "x");
+    try testing.expect(s.setDelete(lookup));
+    try testing.expect(!s.setDelete(lookup));
+    try testing.expectEqual(@as(usize, 1), lookup.string.count);
+    lookup.deinit();
+    s.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}
+
+test "setClear: releases every element" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const s = try JSValue.newSet(a);
+    try s.setAdd(try JSValue.newString(a, "a"));
+    try s.setAdd(try JSValue.newArray(a));
+    try s.setAdd(JSValue.fromNumber(1));
+    s.setClear();
+    try testing.expectEqual(@as(usize, 0), s.set.value.size());
+    s.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}

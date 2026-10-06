@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
-const JSValue = @import("zvalue").JSValue;
+const zvalue = @import("zvalue");
+const JSValue = zvalue.JSValue;
 const FailingAllocator = std.testing.FailingAllocator;
 
 test "object: set value types, deinit frees the object" {
@@ -100,4 +101,143 @@ test "object: releasing a 100 000-deep property chain does not overflow the stac
         cur = outer;
     }
     cur.deinit();
+}
+
+// ---- Rc-aware mutation wrappers -----------------------------------------
+
+test "objectSet: new key, replacement and same box keep counts balanced" {
+    const a = testing.allocator;
+    const o = try JSValue.newObject(a);
+    defer o.deinit();
+
+    try o.objectSet("x", try JSValue.newString(a, "first"));
+    // Replacement releases "first" (the testing allocator reports it otherwise).
+    try o.objectSet("x", try JSValue.newString(a, "second"));
+    try testing.expectEqualStrings("second", o.object.value.get("x").?.string.value.data);
+
+    // Same box: `o.x = o.x` -- store first, release after, never hits zero.
+    const cur = o.object.value.get("x").?;
+    try testing.expectEqual(@as(usize, 1), cur.string.count);
+    try o.objectSet("x", cur.retain());
+    try testing.expectEqual(@as(usize, 1), cur.string.count);
+    try testing.expectEqualStrings("second", o.object.value.get("x").?.string.value.data);
+}
+
+test "objectSet: replacing an accessor releases its getter and setter" {
+    const a = testing.allocator;
+    const o = try JSValue.newObject(a);
+    defer o.deinit();
+    try o.object.value.defineAccessor("acc", try JSValue.newString(a, "getter"), try JSValue.newString(a, "setter"), JSValue.UNDEFINED);
+    try o.objectSet("acc", JSValue.fromNumber(1));
+    const rec = o.object.value.getOwnRecord("acc").?;
+    try testing.expect(!rec.isAccessor());
+    try testing.expectEqual(@as(f64, 1), rec.value.number);
+}
+
+test "objectSet: a refused set (frozen) consumes the value and leaves the object unchanged" {
+    const a = testing.allocator;
+    const o = try JSValue.newObject(a);
+    defer o.deinit();
+    try o.objectSet("x", try JSValue.newString(a, "kept"));
+    o.object.value.freeze();
+    try testing.expectError(error.ObjectIsFrozen, o.objectSet("x", try JSValue.newString(a, "dropped")));
+    try testing.expectEqualStrings("kept", o.object.value.get("x").?.string.value.data);
+}
+
+test "objectSet: out of memory consumes the value, nothing leaks" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const o = try JSValue.newObject(a);
+    const v = try JSValue.newString(a, "value");
+    fa.fail_index = fa.alloc_index; // the next allocation (the new key) fails
+    try testing.expectError(error.OutOfMemory, o.objectSet("new", v));
+    fa.fail_index = std.math.maxInt(usize);
+    try testing.expect(o.object.value.getOwn("new") == null);
+    o.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}
+
+test "objectSet: assign then replace then deinit leaks nothing (byte count)" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const o = try JSValue.newObject(a);
+    try o.objectSet("k", try JSValue.newString(a, "one"));
+    try o.objectSet("k", try JSValue.newString(a, "two"));
+    try o.objectSet("k", try JSValue.newArray(a));
+    o.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}
+
+test "objectDefine: replaces a value, turns an accessor into data, same box, refusal" {
+    const a = testing.allocator;
+    const o = try JSValue.newObject(a);
+    defer o.deinit();
+    const data: zvalue.PropertyDescriptor = .{ .writable = true, .enumerable = true, .configurable = true };
+
+    try o.objectDefine("x", try JSValue.newString(a, "first"), data);
+    try o.objectDefine("x", try JSValue.newString(a, "second"), data);
+    try testing.expectEqualStrings("second", o.object.value.get("x").?.string.value.data);
+
+    // Over an accessor: slots cleared and released.
+    try o.object.value.defineAccessor("acc", try JSValue.newString(a, "getter"), null, JSValue.UNDEFINED);
+    try o.objectDefine("acc", JSValue.fromNumber(2), data);
+    try testing.expect(!o.object.value.getOwnRecord("acc").?.isAccessor());
+
+    // Same box.
+    const cur = o.object.value.get("x").?;
+    try o.objectDefine("x", cur.retain(), data);
+    try testing.expectEqual(@as(usize, 1), cur.string.count);
+
+    // Refusal: redefining a non-configurable property consumes the value.
+    try o.objectDefine("fixed", try JSValue.newString(a, "kept"), .{ .writable = false, .enumerable = true, .configurable = false });
+    try testing.expectError(error.PropertyNotConfigurable, o.objectDefine("fixed", try JSValue.newString(a, "dropped"), data));
+    try testing.expectEqualStrings("kept", o.object.value.get("fixed").?.string.value.data);
+}
+
+test "objectDefine: out of memory consumes the value, nothing leaks" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const o = try JSValue.newObject(a);
+    const v = try JSValue.newString(a, "value");
+    fa.fail_index = fa.alloc_index;
+    try testing.expectError(error.OutOfMemory, o.objectDefine("new", v, .{ .writable = true, .enumerable = true, .configurable = true }));
+    fa.fail_index = std.math.maxInt(usize);
+    o.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}
+
+test "objectDelete: releases the removed value and accessor slots; refusal releases nothing" {
+    const a = testing.allocator;
+    const o = try JSValue.newObject(a);
+    defer o.deinit();
+    try o.objectSet("x", try JSValue.newString(a, "gone"));
+    try o.object.value.defineAccessor("acc", try JSValue.newString(a, "g"), try JSValue.newString(a, "s"), JSValue.UNDEFINED);
+    try testing.expect(try o.objectDelete("x"));
+    try testing.expect(try o.objectDelete("acc"));
+    try testing.expect(!try o.objectDelete("x"));
+    try testing.expectEqual(@as(usize, 0), o.object.value.size());
+
+    try o.objectSet("y", try JSValue.newString(a, "stays"));
+    o.object.value.freeze();
+    try testing.expectError(error.ObjectIsFrozen, o.objectDelete("y"));
+    try testing.expectEqualStrings("stays", o.object.value.get("y").?.string.value.data);
+}
+
+test "objectClear: releases every value; a refused clear releases nothing" {
+    const a = testing.allocator;
+    const o = try JSValue.newObject(a);
+    defer o.deinit();
+    try o.objectSet("a", try JSValue.newString(a, "1"));
+    try o.objectSet("b", try JSValue.newArray(a));
+    try o.object.value.defineAccessor("c", try JSValue.newString(a, "g"), null, JSValue.UNDEFINED);
+    try o.objectClear();
+    try testing.expectEqual(@as(usize, 0), o.object.value.size());
+
+    try o.objectSet("a", try JSValue.newString(a, "kept"));
+    try o.objectDefine("fixed", try JSValue.newString(a, "kept too"), .{ .writable = true, .enumerable = true, .configurable = false });
+    try testing.expectError(error.PropertyNotConfigurable, o.objectClear());
+    try testing.expectEqualStrings("kept", o.object.value.get("a").?.string.value.data);
+    o.object.value.freeze();
+    try testing.expectError(error.ObjectIsFrozen, o.objectClear());
+    try testing.expectEqual(@as(usize, 2), o.object.value.size());
 }

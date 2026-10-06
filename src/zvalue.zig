@@ -44,6 +44,8 @@ pub const TemporalValue = ztemporal_value.TemporalValue;
 /// Re-exported for embedders implementing Object.defineProperty over
 /// ZObject records.
 pub const PropertyDescriptor = zobject.PropertyDescriptor;
+/// Re-exported for the Rc-aware object mutators (`objectSet` and friends).
+pub const ZObjectError = zobject.ZObjectError;
 
 /// A JS value: undefined/null/boolean/number are inline (trivially copyable
 /// bits); string/array/object/regex are heap-owning and live behind a
@@ -590,6 +592,180 @@ pub const JSValue = union(enum) {
                 if (box.decref()) pending.push(@tagName(tag), box);
             },
         }
+    }
+
+    // ---- Rc-aware mutation ------------------------------------------------
+    //
+    // z-object/z-map/z-set store and drop values by plain copy: generic over
+    // T, they never release a value they overwrite or remove. These wrappers
+    // do it for JSValue containers. Same contract as the constructors: every
+    // JSValue handed in is consumed, also when the call fails. A value being
+    // replaced is released only AFTER the new one is stored, so replacing a
+    // value with the same box (`o.x = o.x`) never drops its count to zero
+    // midway. Each requires the matching variant (see `requireTag`).
+
+    /// `self[key] = value`, releasing whatever the property held before
+    /// (its value, or its getter/setter if it was an accessor -- a plain set
+    /// replaces an accessor with a data property). On error (frozen,
+    /// non-writable, non-extensible, out of memory) `value` is released and
+    /// the property is unchanged.
+    pub fn objectSet(self: JSValue, key: []const u8, value: JSValue) ZObjectError!void {
+        self.requireTag(.object, "objectSet: expected .object");
+        const obj = &self.object.value;
+        const old = OwnSlots.read(obj, key);
+        obj.set(key, value) catch |err| {
+            value.deinit();
+            return err;
+        };
+        old.release();
+    }
+
+    /// Defines `key` as a data property with `descriptor`, releasing what it
+    /// held before. If it was an accessor, its getter/setter slots are
+    /// cleared (it becomes a data property, as in JS) and released. On error
+    /// `value` is released and the property is unchanged.
+    pub fn objectDefine(self: JSValue, key: []const u8, value: JSValue, descriptor: PropertyDescriptor) ZObjectError!void {
+        self.requireTag(.object, "objectDefine: expected .object");
+        const obj = &self.object.value;
+        const old = OwnSlots.read(obj, key);
+        obj.defineProperty(key, value, descriptor) catch |err| {
+            value.deinit();
+            return err;
+        };
+        // defineProperty leaves the accessor slots in place; drop them
+        // before releasing what they pointed to.
+        if (obj.getOwnRecordMut(key)) |rec| {
+            rec.getter = null;
+            rec.setter = null;
+        }
+        old.release();
+    }
+
+    /// Removes own property `key` and releases its value (and getter/
+    /// setter). Returns false if it wasn't there. On error (frozen,
+    /// non-configurable) nothing is removed or released.
+    pub fn objectDelete(self: JSValue, key: []const u8) ZObjectError!bool {
+        self.requireTag(.object, "objectDelete: expected .object");
+        const obj = &self.object.value;
+        const old = OwnSlots.read(obj, key);
+        const removed = try obj.delete(key);
+        if (removed) old.release();
+        return removed;
+    }
+
+    /// Removes every own property and releases what they held. Fails --
+    /// releasing nothing -- under the same conditions as `ZObject.clear`
+    /// (a frozen object, or any non-configurable property), which are
+    /// checked first so values are never released for a clear that is then
+    /// refused.
+    pub fn objectClear(self: JSValue) ZObjectError!void {
+        self.requireTag(.object, "objectClear: expected .object");
+        const obj = &self.object.value;
+        if (obj.is_frozen) return error.ObjectIsFrozen;
+        for (obj.properties.values()) |prop| {
+            if (!prop.descriptor.configurable) return error.PropertyNotConfigurable;
+        }
+        for (obj.properties.values()) |prop| {
+            prop.value.deinit();
+            if (prop.getter) |g| g.deinit();
+            if (prop.setter) |st| st.deinit();
+        }
+        obj.clear() catch |err| std.debug.panic("objectClear: ZObject.clear refused after its preconditions passed: {s}", .{@errorName(err)});
+    }
+
+    /// The JSValues one own property slot holds, copied out before a
+    /// mutation so they can be released once it has succeeded.
+    const OwnSlots = struct {
+        value: ?JSValue = null,
+        getter: ?JSValue = null,
+        setter: ?JSValue = null,
+
+        fn read(obj: *const ZObject(JSValue), key: []const u8) OwnSlots {
+            const rec = obj.getOwnRecord(key) orelse return .{};
+            return .{ .value = rec.value, .getter = rec.getter, .setter = rec.setter };
+        }
+
+        fn release(self: OwnSlots) void {
+            if (self.value) |v| v.deinit();
+            if (self.getter) |g| g.deinit();
+            if (self.setter) |st| st.deinit();
+        }
+    };
+
+    /// `self.set(key, value)` with Map semantics: an existing key keeps its
+    /// position and its STORED key box; the old value and the incoming
+    /// (now redundant) key are released after the new value is stored. On
+    /// error both `key` and `value` are released and the map is unchanged.
+    pub fn mapSet(self: JSValue, key: JSValue, value: JSValue) ZValueError!void {
+        self.requireTag(.map, "mapSet: expected .map");
+        const m = &self.map.value;
+        const old_value = m.get(key);
+        m.set(key, value) catch |err| {
+            key.deinit();
+            value.deinit();
+            return err;
+        };
+        if (old_value) |old| {
+            key.deinit();
+            old.deinit();
+        }
+    }
+
+    /// Removes `key` and releases the STORED key and its value (the stored
+    /// key may be a different, equal box than `key`, e.g. two "k" strings).
+    /// `key` itself is only looked up, not consumed. Returns false if the
+    /// key wasn't there.
+    pub fn mapDelete(self: JSValue, key: JSValue) bool {
+        self.requireTag(.map, "mapDelete: expected .map");
+        const entry = self.map.value.fetchDelete(key) orelse return false;
+        entry.key.deinit();
+        entry.value.deinit();
+        return true;
+    }
+
+    /// Removes every entry and releases every key and value.
+    pub fn mapClear(self: JSValue) void {
+        self.requireTag(.map, "mapClear: expected .map");
+        const m = &self.map.value;
+        for (m.keys()) |key| key.deinit();
+        for (m.values()) |value| value.deinit();
+        m.clear();
+    }
+
+    /// Adds `value` unless an equal value is already present, in which case
+    /// `value` is released (the stored one stays). On error `value` is
+    /// released and the set is unchanged.
+    pub fn setAdd(self: JSValue, value: JSValue) ZValueError!void {
+        self.requireTag(.set, "setAdd: expected .set");
+        const st = &self.set.value;
+        if (st.has(value)) {
+            value.deinit();
+            return;
+        }
+        st.add(value) catch |err| {
+            value.deinit();
+            return err;
+        };
+    }
+
+    /// Removes `value` and releases the STORED element (possibly a
+    /// different, equal box). `value` itself is only looked up, not
+    /// consumed. Returns false if it wasn't there.
+    pub fn setDelete(self: JSValue, value: JSValue) bool {
+        self.requireTag(.set, "setDelete: expected .set");
+        // ZSet is a ZMap(T, void) underneath; its fetchDelete hands back
+        // the stored element.
+        const entry = self.set.value.map.fetchDelete(value) orelse return false;
+        entry.key.deinit();
+        return true;
+    }
+
+    /// Removes every element and releases it.
+    pub fn setClear(self: JSValue) void {
+        self.requireTag(.set, "setClear: expected .set");
+        const st = &self.set.value;
+        for (st.values()) |value| value.deinit();
+        st.clear();
     }
 
     /// Rc-aware duplicate of a `.array` JSValue: unlike `ZArray(JSValue).clone()`

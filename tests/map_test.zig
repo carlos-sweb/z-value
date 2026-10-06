@@ -113,3 +113,74 @@ test "map: releasing a 100 000-deep chain (map as key and as value) does not ove
     }
     cur.deinit();
 }
+
+// ---- Rc-aware mutation wrappers -----------------------------------------
+
+test "mapSet: new key, replacement keeps the stored key and position, releases old value and incoming key" {
+    const a = testing.allocator;
+    const m = try JSValue.newMap(a);
+    defer m.deinit();
+
+    try m.mapSet(try JSValue.newString(a, "k1"), try JSValue.newString(a, "v1"));
+    try m.mapSet(try JSValue.newString(a, "k2"), try JSValue.newString(a, "v2"));
+    const stored_k1 = m.map.value.keys()[0];
+    // An equal key in a different box: stored key kept, incoming key and
+    // old value released (the testing allocator reports any leak).
+    try m.mapSet(try JSValue.newString(a, "k1"), try JSValue.newString(a, "v1b"));
+    try testing.expectEqual(@as(usize, 2), m.map.value.size());
+    try testing.expect(m.map.value.keys()[0].string == stored_k1.string); // same box, same position
+    try testing.expectEqualStrings("v1b", m.map.value.values()[0].string.value.data);
+}
+
+test "mapSet: the same key box and the same value box keep counts balanced" {
+    const a = testing.allocator;
+    const m = try JSValue.newMap(a);
+    defer m.deinit();
+    const k = try JSValue.newString(a, "k");
+    const v = try JSValue.newString(a, "v");
+    try m.mapSet(k, v); // map owns both now (count 1 each)
+    try m.mapSet(k.retain(), v.retain());
+    try testing.expectEqual(@as(usize, 1), k.string.count);
+    try testing.expectEqual(@as(usize, 1), v.string.count);
+    try testing.expectEqual(@as(usize, 1), m.map.value.size());
+}
+
+test "mapSet: out of memory consumes key and value, nothing leaks" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const m = try JSValue.newMap(a);
+    const k = try JSValue.newString(a, "k");
+    const v = try JSValue.newString(a, "v");
+    fa.fail_index = fa.alloc_index; // the map's first storage allocation fails
+    try testing.expectError(error.OutOfMemory, m.mapSet(k, v));
+    fa.fail_index = std.math.maxInt(usize);
+    try testing.expectEqual(@as(usize, 0), m.map.value.size());
+    m.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}
+
+test "mapDelete: releases the STORED key (an equal key in another box) and the value" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const m = try JSValue.newMap(a);
+    try m.mapSet(try JSValue.newString(a, "k"), try JSValue.newString(a, "v"));
+    const lookup = try JSValue.newString(a, "k"); // equal, different box
+    try testing.expect(m.mapDelete(lookup));
+    try testing.expect(!m.mapDelete(lookup));
+    try testing.expectEqual(@as(usize, 1), lookup.string.count); // not consumed
+    lookup.deinit();
+    m.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}
+
+test "mapClear: releases every key and value" {
+    var fa = FailingAllocator.init(testing.allocator, .{});
+    const a = fa.allocator();
+    const m = try JSValue.newMap(a);
+    for (0..5) |i| try m.mapSet(JSValue.fromNumber(@floatFromInt(i)), try JSValue.newString(a, "v"));
+    try m.mapSet(try JSValue.newArray(a), try JSValue.newObject(a));
+    m.mapClear();
+    try testing.expectEqual(@as(usize, 0), m.map.value.size());
+    m.deinit();
+    try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
+}
