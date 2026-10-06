@@ -31,10 +31,10 @@ test "error: each ErrorKind round-trips through toString via the wrapper" {
 test "error: shared box is released once per retain" {
     var err = try JSValue.newError(testing.allocator, .range_error, "shared");
     _ = err.retain();
-    try testing.expectEqual(@as(usize, 2), err.@"error".count);
+    try testing.expectEqual(@as(usize, 2), err.@"error".refCount());
 
     err.deinit();
-    try testing.expectEqual(@as(usize, 1), err.@"error".count);
+    try testing.expectEqual(@as(usize, 1), err.@"error".refCount());
 
     err.deinit();
 }
@@ -69,13 +69,13 @@ test "cloneError duplicates a plain error independently" {
 test "cloneError retains every nested value of an AggregateError" {
     const child = try JSValue.newString(testing.allocator, "shared");
     var original = try JSValue.newAggregateError(testing.allocator, "batch", &.{child});
-    try testing.expectEqual(@as(usize, 1), child.string.count);
+    try testing.expectEqual(@as(usize, 1), child.string.refCount());
 
     var copy = try original.cloneError();
-    try testing.expectEqual(@as(usize, 2), child.string.count);
+    try testing.expectEqual(@as(usize, 2), child.string.refCount());
 
     original.deinit();
-    try testing.expectEqual(@as(usize, 1), child.string.count);
+    try testing.expectEqual(@as(usize, 1), child.string.refCount());
 
     copy.deinit();
 }

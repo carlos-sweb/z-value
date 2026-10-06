@@ -14,9 +14,9 @@ test "date value: retain twice, deinit twice, no leak" {
     const d = try JSValue.newDate(testing.allocator, 0);
     const d2 = d.retain();
     try testing.expect(d.date == d2.date);
-    try testing.expectEqual(@as(usize, 2), d.date.count);
+    try testing.expectEqual(@as(usize, 2), d.date.refCount());
     d.deinit();
-    try testing.expectEqual(@as(usize, 1), d2.date.count);
+    try testing.expectEqual(@as(usize, 1), d2.date.refCount());
     d2.deinit();
 }
 

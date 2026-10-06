@@ -17,9 +17,9 @@ test "temporal value: retain twice, deinit twice, no leak" {
     const v = try JSValue.newTemporal(testing.allocator, .{ .instant = inst });
     const v2 = v.retain();
     try testing.expect(v.temporal == v2.temporal);
-    try testing.expectEqual(@as(usize, 2), v.temporal.count);
+    try testing.expectEqual(@as(usize, 2), v.temporal.refCount());
     v.deinit();
-    try testing.expectEqual(@as(usize, 1), v2.temporal.count);
+    try testing.expectEqual(@as(usize, 1), v2.temporal.refCount());
     v2.deinit();
 }
 

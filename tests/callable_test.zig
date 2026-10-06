@@ -34,10 +34,10 @@ test "function value: retain twice, deinit twice, no leak" {
     const f = try JSValue.newFunction(testing.allocator, .{ .ctx = &dummy_ctx, .call = dummyCall });
     const f2 = f.retain();
     try testing.expect(f.function == f2.function);
-    try testing.expectEqual(@as(usize, 2), f.function.count);
+    try testing.expectEqual(@as(usize, 2), f.function.refCount());
 
     f.deinit();
-    try testing.expectEqual(@as(usize, 1), f2.function.count);
+    try testing.expectEqual(@as(usize, 1), f2.function.refCount());
     f2.deinit();
 }
 

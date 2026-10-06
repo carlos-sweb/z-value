@@ -203,7 +203,7 @@ test "deinit releases a shared child exactly once, whatever the release order" {
     const root = try JSValue.newArray(testing.allocator);
     _ = try root.array.value.push(left);
     _ = try root.array.value.push(right);
-    try testing.expectEqual(@as(usize, 4), shared.array.count);
+    try testing.expectEqual(@as(usize, 4), shared.array.refCount());
     root.deinit();
-    try testing.expectEqual(@as(usize, 1), shared.array.count);
+    try testing.expectEqual(@as(usize, 1), shared.array.refCount());
 }

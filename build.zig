@@ -99,11 +99,12 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run.step);
     }
 
-    // Rc zero-counter check: a release at count 0 must abort with SIGABRT
-    // and the panic message in every build mode, ReleaseFast included; a
-    // balanced retain/release sequence must exit cleanly.
+    // Rc checks: a release at count 0 and a second setGcHook must abort
+    // with SIGABRT and the panic message in every build mode, ReleaseFast
+    // included; balanced use must exit cleanly.
     const rc_panic_cases = [_]struct { []const u8, ?[]const u8 }{
         .{ "doubleRelease", "Rc.decref: count is 0" },
+        .{ "doubleGcHook", "setGcHook: a hook is already installed; call clearGcHook first or use a single install" },
         .{ "balanced", null },
     };
     inline for (rc_panic_cases) |c| {

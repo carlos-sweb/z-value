@@ -22,10 +22,10 @@ test "set: shared value is released once per retain" {
     var outer = try JSValue.newSet(testing.allocator);
     try outer.set.value.add(inner.retain());
 
-    try testing.expectEqual(@as(usize, 2), inner.array.count); // test's own + 1 retained add
+    try testing.expectEqual(@as(usize, 2), inner.array.refCount()); // test's own + 1 retained add
 
     outer.deinit();
-    try testing.expectEqual(@as(usize, 1), inner.array.count);
+    try testing.expectEqual(@as(usize, 1), inner.array.refCount());
 
     inner.deinit();
 }
@@ -34,13 +34,13 @@ test "cloneSet retains every value" {
     var original = try JSValue.newSet(testing.allocator);
     const child = try JSValue.newString(testing.allocator, "shared");
     try original.set.value.add(child);
-    try testing.expectEqual(@as(usize, 1), child.string.count);
+    try testing.expectEqual(@as(usize, 1), child.string.refCount());
 
     var copy = try original.cloneSet();
-    try testing.expectEqual(@as(usize, 2), child.string.count);
+    try testing.expectEqual(@as(usize, 2), child.string.refCount());
 
     original.deinit();
-    try testing.expectEqual(@as(usize, 1), child.string.count);
+    try testing.expectEqual(@as(usize, 1), child.string.refCount());
 
     copy.deinit();
 }
@@ -122,7 +122,7 @@ test "setAdd: the same box keeps its count balanced" {
     const v = try JSValue.newString(a, "x");
     try s.setAdd(v);
     try s.setAdd(v.retain());
-    try testing.expectEqual(@as(usize, 1), v.string.count);
+    try testing.expectEqual(@as(usize, 1), v.string.refCount());
     try testing.expectEqual(@as(usize, 1), s.set.value.size());
 }
 
@@ -147,7 +147,7 @@ test "setDelete: releases the STORED element; the lookup value is not consumed" 
     const lookup = try JSValue.newString(a, "x");
     try testing.expect(s.setDelete(lookup));
     try testing.expect(!s.setDelete(lookup));
-    try testing.expectEqual(@as(usize, 1), lookup.string.count);
+    try testing.expectEqual(@as(usize, 1), lookup.string.refCount());
     lookup.deinit();
     s.deinit();
     try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);

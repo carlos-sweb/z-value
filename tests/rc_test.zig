@@ -12,10 +12,10 @@ test "string value: retain twice, deinit twice, no leak" {
     const s = try JSValue.newString(testing.allocator, "hello");
     const s2 = s.retain();
     try testing.expect(s.string == s2.string);
-    try testing.expectEqual(@as(usize, 2), s.string.count);
+    try testing.expectEqual(@as(usize, 2), s.string.refCount());
 
     s.deinit();
-    try testing.expectEqual(@as(usize, 1), s2.string.count);
+    try testing.expectEqual(@as(usize, 1), s2.string.refCount());
     s2.deinit();
 }
 

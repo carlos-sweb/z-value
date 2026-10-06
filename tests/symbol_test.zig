@@ -12,10 +12,10 @@ test "newSymbol: retain twice, deinit twice, no leak" {
     const s = try JSValue.newSymbol(testing.allocator, "id");
     const s2 = s.retain();
     try testing.expect(s.symbol == s2.symbol);
-    try testing.expectEqual(@as(usize, 2), s.symbol.count);
+    try testing.expectEqual(@as(usize, 2), s.symbol.refCount());
 
     s.deinit();
-    try testing.expectEqual(@as(usize, 1), s2.symbol.count);
+    try testing.expectEqual(@as(usize, 1), s2.symbol.refCount());
     s2.deinit();
 }
 

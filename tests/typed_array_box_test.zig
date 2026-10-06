@@ -34,11 +34,11 @@ test "typed arrays compare by identity, not by content" {
 
 test "deinit releases the owning ArrayBuffer reference (refcount, not a leak/crash)" {
     const buf = try JSValue.newArrayBuffer(testing.allocator, 4);
-    try testing.expectEqual(@as(usize, 1), buf.array_buffer.count);
+    try testing.expectEqual(@as(usize, 1), buf.array_buffer.refCount());
     const ta = try JSValue.newTypedArray(testing.allocator, buf.retain(), 0, 4, .u8);
-    try testing.expectEqual(@as(usize, 2), buf.array_buffer.count);
+    try testing.expectEqual(@as(usize, 2), buf.array_buffer.refCount());
     ta.deinit();
-    try testing.expectEqual(@as(usize, 1), buf.array_buffer.count);
+    try testing.expectEqual(@as(usize, 1), buf.array_buffer.refCount());
     buf.deinit();
 }
 
@@ -54,7 +54,7 @@ test "newTypedArray validates alignment and bounds, doesn't just trust its args"
 test "an out-of-bounds constructor attempt doesn't leak the owner reference" {
     const buf = try JSValue.newArrayBuffer(testing.allocator, 4);
     defer buf.deinit();
-    try testing.expectEqual(@as(usize, 1), buf.array_buffer.count);
+    try testing.expectEqual(@as(usize, 1), buf.array_buffer.refCount());
     _ = JSValue.newTypedArray(testing.allocator, buf.retain(), 0, 99, .i32) catch {};
-    try testing.expectEqual(@as(usize, 1), buf.array_buffer.count); // the extra retain() was released
+    try testing.expectEqual(@as(usize, 1), buf.array_buffer.refCount()); // the extra retain() was released
 }

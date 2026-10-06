@@ -27,10 +27,10 @@ test "map: shared child value is released once per retain" {
     try outer.map.value.set(JSValue.fromNumber(2.0), inner.retain());
 
     // count: 1 (test's own `inner`) + 2 (two retained sets) = 3
-    try testing.expectEqual(@as(usize, 3), inner.string.count);
+    try testing.expectEqual(@as(usize, 3), inner.string.refCount());
 
     outer.deinit(); // releases both stored references: count 3 -> 1
-    try testing.expectEqual(@as(usize, 1), inner.string.count);
+    try testing.expectEqual(@as(usize, 1), inner.string.refCount());
 
     inner.deinit();
 }
@@ -40,17 +40,17 @@ test "cloneMap retains every key and value" {
     const key = try JSValue.newString(testing.allocator, "k");
     const value = try JSValue.newString(testing.allocator, "v");
     try original.map.value.set(key, value);
-    try testing.expectEqual(@as(usize, 1), key.string.count);
-    try testing.expectEqual(@as(usize, 1), value.string.count);
+    try testing.expectEqual(@as(usize, 1), key.string.refCount());
+    try testing.expectEqual(@as(usize, 1), value.string.refCount());
 
     var copy = try original.cloneMap();
 
-    try testing.expectEqual(@as(usize, 2), key.string.count);
-    try testing.expectEqual(@as(usize, 2), value.string.count);
+    try testing.expectEqual(@as(usize, 2), key.string.refCount());
+    try testing.expectEqual(@as(usize, 2), value.string.refCount());
 
     original.deinit();
-    try testing.expectEqual(@as(usize, 1), key.string.count);
-    try testing.expectEqual(@as(usize, 1), value.string.count);
+    try testing.expectEqual(@as(usize, 1), key.string.refCount());
+    try testing.expectEqual(@as(usize, 1), value.string.refCount());
 
     copy.deinit();
 }
@@ -140,8 +140,8 @@ test "mapSet: the same key box and the same value box keep counts balanced" {
     const v = try JSValue.newString(a, "v");
     try m.mapSet(k, v); // map owns both now (count 1 each)
     try m.mapSet(k.retain(), v.retain());
-    try testing.expectEqual(@as(usize, 1), k.string.count);
-    try testing.expectEqual(@as(usize, 1), v.string.count);
+    try testing.expectEqual(@as(usize, 1), k.string.refCount());
+    try testing.expectEqual(@as(usize, 1), v.string.refCount());
     try testing.expectEqual(@as(usize, 1), m.map.value.size());
 }
 
@@ -167,7 +167,7 @@ test "mapDelete: releases the STORED key (an equal key in another box) and the v
     const lookup = try JSValue.newString(a, "k"); // equal, different box
     try testing.expect(m.mapDelete(lookup));
     try testing.expect(!m.mapDelete(lookup));
-    try testing.expectEqual(@as(usize, 1), lookup.string.count); // not consumed
+    try testing.expectEqual(@as(usize, 1), lookup.string.refCount()); // not consumed
     lookup.deinit();
     m.deinit();
     try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);

@@ -16,9 +16,9 @@ test "regex: retain/deinit balance (Rc works with Regex.deinit's by-value receiv
     const v = try JSValue.fromRegex(testing.allocator, re);
     const v2 = v.retain();
 
-    try testing.expectEqual(@as(usize, 2), v.regex.count);
+    try testing.expectEqual(@as(usize, 2), v.regex.refCount());
     v.deinit();
-    try testing.expectEqual(@as(usize, 1), v2.regex.count);
+    try testing.expectEqual(@as(usize, 1), v2.regex.refCount());
     v2.deinit();
 }
 

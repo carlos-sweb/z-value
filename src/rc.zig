@@ -17,10 +17,11 @@ const Allocator = std.mem.Allocator;
 /// - Single-threaded. `count` is a plain `usize`, not atomic: a box (and
 ///   every JSValue reaching it) must stay on one thread. A multi-threaded
 ///   consumer needs a separate Arc-style type, not a flag on this one.
-/// - `count` is internal, not public API. While `JSValue.deinit()` tears a
-///   tree down, a box whose count reached zero reuses `count` as the link of
-///   a pending-release list, so it can hold a pointer value instead of 0.
-///   Consumers must not read or write it; use `retain()` / `JSValue.deinit()`.
+/// - `count` is internal, not public API. While `JSValue.deinit()` tears
+///   a tree down, a box whose count reached zero reuses `count` as the
+///   link of a pending-release list, so it can hold a pointer value instead
+///   of 0. Consumers must not write it; use `retain()` / `JSValue.deinit()`,
+///   and read it only through `refCount()`.
 /// - Teardown order: the payload (`value`) is destroyed first, then
 ///   `destroy()` fires the GC hook (if any), then the box memory is freed.
 pub fn Rc(comptime T: type) type {
@@ -28,6 +29,7 @@ pub fn Rc(comptime T: type) type {
         const Self = @This();
 
         /// Internal refcount -- not public API, see the invariants above.
+        /// Zig has no private fields; read it through `refCount()`.
         count: usize,
         allocator: Allocator,
         value: T,
@@ -59,13 +61,34 @@ pub fn Rc(comptime T: type) type {
         }
 
         /// Installs the GC hook (see the field doc comment). It does not
-        /// call it: the hook is called later, once, by `destroy()`. Calling
-        /// this again silently overwrites the previous ctx and hook.
+        /// call it: the hook is called later, once, by `destroy()`. A box
+        /// takes one hook: calling this while a hook is already installed
+        /// aborts with a panic, in every build mode, instead of silently
+        /// dropping the first one. Use `clearGcHook()` first to replace it.
         /// Returns `self` so call sites can chain it onto `create()`.
         pub fn setGcHook(self: *Self, ctx: *anyopaque, hook: *const fn (ctx: *anyopaque, box: *anyopaque) void) *Self {
+            if (self.gc_hook != null) {
+                @branchHint(.cold);
+                std.debug.panic("setGcHook: a hook is already installed; call clearGcHook first or use a single install", .{});
+            }
             self.gc_hook_ctx = ctx;
             self.gc_hook = hook;
             return self;
+        }
+
+        /// Removes the GC hook, if any; `destroy()` then fires nothing.
+        /// Returns `self` so call sites can chain it.
+        pub fn clearGcHook(self: *Self) *Self {
+            self.gc_hook_ctx = null;
+            self.gc_hook = null;
+            return self;
+        }
+
+        /// The current reference count, for tests and diagnostics. Not
+        /// meaningful once the count has reached zero (see the invariants
+        /// above).
+        pub fn refCount(self: *const Self) usize {
+            return self.count;
         }
 
         /// Increments the refcount. Returns self so call sites can chain.

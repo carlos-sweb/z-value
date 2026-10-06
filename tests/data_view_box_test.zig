@@ -41,13 +41,13 @@ test "DataView reads/writes through to its owning ArrayBuffer" {
 
 test "deinit releases the owning ArrayBuffer reference (refcount, not a leak/crash)" {
     const buf = try JSValue.newArrayBuffer(testing.allocator, 4);
-    try testing.expectEqual(@as(usize, 1), buf.array_buffer.count);
+    try testing.expectEqual(@as(usize, 1), buf.array_buffer.refCount());
 
     const dv = try JSValue.newDataView(testing.allocator, buf.retain(), 0, null);
-    try testing.expectEqual(@as(usize, 2), buf.array_buffer.count);
+    try testing.expectEqual(@as(usize, 2), buf.array_buffer.refCount());
 
     dv.deinit();
-    try testing.expectEqual(@as(usize, 1), buf.array_buffer.count);
+    try testing.expectEqual(@as(usize, 1), buf.array_buffer.refCount());
     buf.deinit();
 }
 

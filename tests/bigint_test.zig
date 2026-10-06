@@ -14,9 +14,9 @@ test "bigint value: retain twice, deinit twice, no leak" {
     const v = try JSValue.newBigInt(testing.allocator, "42");
     const v2 = v.retain();
     try testing.expect(v.bigint == v2.bigint);
-    try testing.expectEqual(@as(usize, 2), v.bigint.count);
+    try testing.expectEqual(@as(usize, 2), v.bigint.refCount());
     v.deinit();
-    try testing.expectEqual(@as(usize, 1), v2.bigint.count);
+    try testing.expectEqual(@as(usize, 1), v2.bigint.refCount());
     v2.deinit();
 }
 

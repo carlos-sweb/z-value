@@ -21,10 +21,10 @@ test "array: shared child array is released once per retain, not once per contai
     try outer.array.value.items.append(testing.allocator, inner.retain());
 
     // count: 1 (test's own `inner`) + 2 (two retained pushes) = 3
-    try testing.expectEqual(@as(usize, 3), inner.array.count);
+    try testing.expectEqual(@as(usize, 3), inner.array.refCount());
 
     outer.deinit(); // releases both pushed references: count 3 -> 1
-    try testing.expectEqual(@as(usize, 1), inner.array.count);
+    try testing.expectEqual(@as(usize, 1), inner.array.refCount());
 
     inner.deinit(); // the test's own reference: count 1 -> 0, actually freed
 }
@@ -42,16 +42,16 @@ test "cloneArray retains every child (regression: ZArray.clone() alone would not
     var original = try JSValue.newArray(testing.allocator);
     const child = try JSValue.newString(testing.allocator, "shared");
     try original.array.value.items.append(testing.allocator, child);
-    // original now holds the only reference; child.count == 1.
-    try testing.expectEqual(@as(usize, 1), child.string.count);
+    // original now holds the only reference; child.refCount() == 1.
+    try testing.expectEqual(@as(usize, 1), child.string.refCount());
 
     var copy = try original.cloneArray();
 
     // cloneArray must have retained the shared child, so its count is now 2.
-    try testing.expectEqual(@as(usize, 2), child.string.count);
+    try testing.expectEqual(@as(usize, 2), child.string.refCount());
 
     original.deinit();
-    try testing.expectEqual(@as(usize, 1), child.string.count); // still alive via copy
+    try testing.expectEqual(@as(usize, 1), child.string.refCount()); // still alive via copy
 
     copy.deinit(); // drops the last reference, frees child
 }
@@ -59,7 +59,7 @@ test "cloneArray retains every child (regression: ZArray.clone() alone would not
 test "reference cycle leaks by design (documented, not a bug to fix here)" {
     var a = try JSValue.newArray(testing.allocator);
     try a.array.value.items.append(testing.allocator, a.retain()); // a contains itself
-    try testing.expectEqual(@as(usize, 2), a.array.count);
+    try testing.expectEqual(@as(usize, 2), a.array.refCount());
 
     // Break the cycle manually so this test doesn't actually leak under
     // std.testing.allocator's leak detector: pop the self-reference back out
