@@ -9,11 +9,18 @@
 
 ## Current Status
 
-*As of 2026-10-05, `master` at the merge of commit `2546893` (version `0.1.0` in `build.zig.zon`).*
+*As of 2026-10-06, `master` at commit `a509591` (version `0.1.0` in `build.zig.zon`).*
 
 - **21 variants**, all functional: 4 inline (`undefined`, `null`, `boolean`, `number`) and 17 reference-counted (see [Variant support](#variant-support)).
-- **Test suite:** 114 tests, all passing (`zig build test`).
+- **Test suite:** 148 tests and 69 build steps, all passing (`zig build test`). The build steps include separate processes that check the panics described below.
 - **Fixed since the previous version:** allocation failures no longer leak memory. Every constructor and every `clone*()` helper now releases what it already built when an allocation fails, and constructors that take ownership of their inputs now consume them on failure too (see [Constructors: Ownership Contract](#constructors-ownership-contract)). This closes the long-standing leak in `newString()` and the same defect in 10 other constructors and all 5 clone helpers. 17 new out-of-memory tests cover every allocation point (97 → 114 tests).
+- **Changed since commit `2546893`:**
+  - `deinit()` and `typeOf()` are iterative: nesting depth costs no native stack.
+  - Constructors and `clone*()` helpers given a `JSValue` of the wrong variant abort with a clear panic, in every build mode.
+  - Rc-aware mutation wrappers: `objectSet`, `objectDefine`, `objectDelete`, `objectClear`, `mapSet`, `mapDelete`, `mapClear`, `setAdd`, `setDelete`, `setClear`. They release the values they replace or remove, and the ones that store a value consume it, also on error.
+  - Releasing a box whose count is already 0 aborts with a panic in every build mode, ReleaseFast included.
+  - `setGcHook` aborts if a hook is already installed; `clearGcHook()` removes one.
+  - `Rc(T).refCount()` reads the reference count; the field itself is now the internal `_count`.
 - **Still pending:** see [Known Limitations](#known-limitations). The largest is the missing property bag for non-plain objects (`Map`, `Set`, `Error`, …).
 
 ## Why this exists
@@ -33,7 +40,7 @@ Zig has no copy constructors or destructors, so ownership is a **convention**, n
 
 1. **Copying a `JSValue` does NOT increment the refcount.** `const b = a;` copies the pointer to the same box. `b` is not a new owner.
 2. **Call `.retain()` explicitly when a copy must outlive the original binding** — for example, when storing the same value in a second container, or keeping it after handing the original to a function that consumes it. `retain()` returns the value itself, so it chains: `arr.push(v.retain())`.
-3. **Call `.deinit()` exactly once per owned or retained reference.** `deinit()` decrements the count and only tears the value down (recursively releasing any nested `JSValue`s) when the count reaches zero.
+3. **Call `.deinit()` exactly once per owned or retained reference.** `deinit()` decrements the count and only tears the value down (iteratively releasing any nested `JSValue`s; the observable effect is the same as a recursive release, without using native stack per nesting level) when the count reaches zero.
 
 Inline variants (`undefined`, `null`, `boolean`, `number`) have no box: `retain()` and `deinit()` are no-ops on them, so the same code works for every variant.
 
@@ -43,7 +50,7 @@ Inline variants (`undefined`, `null`, `boolean`, `number`) have no box: `retain(
 |---|---|
 | Forgetting a `deinit()` | Memory leak. `std.testing.allocator` reports it at the end of the test. |
 | Forgetting a `retain()` before storing a second copy | Two holders share one counted reference: the first `deinit()` frees the value while the other holder still points to it → use-after-free, then a double free. |
-| Calling `deinit()` twice on the same reference | Refcount underflow. Caught by an assertion in Debug/ReleaseSafe; **undefined behavior in ReleaseFast**. |
+| Calling `deinit()` twice on the same reference | Release of a box that was already freed. `Rc` checks for a release at count 0 in every build mode, but that check is reliable only while the box has not been freed: after the first `deinit()` frees it, the second may abort, crash, or silently corrupt another box if the memory was reused. |
 
 ### Complete example: create, copy, retain, release
 
@@ -152,9 +159,9 @@ Besides the regular functional tests, every constructor and clone helper listed 
 - `allocated_bytes == freed_bytes`, so nothing leaked, including the inputs a consuming constructor took over;
 - for clones, the source value can still be released normally afterwards (no child was over- or under-retained).
 
-`std.testing.allocator` additionally aborts the test on any double free, and `Rc`'s underflow assertion catches an extra `deinit()`.
+`std.testing.allocator` additionally aborts the test on any double free. `Rc`'s zero-count check catches an extra release while the box is still allocated; an extra `deinit()` on a box that was already freed is not reliably caught by it.
 
-Run the whole suite (114 tests) with:
+Run the whole suite (148 tests) with:
 
 ```bash
 zig build test
@@ -195,8 +202,8 @@ Each item is marked **pending** (known, no fix scheduled yet) or **will be addre
 - **No classification predicates; consumers can crash on new variants — will be addressed.** z-value offers no `isObjectLike()` / `isPrimitive()` / `isCallable()` helpers, so each consumer hand-maintains its own list of variants. Lists written before a variant existed silently miss it: z-toml and z-yaml currently reach an `unreachable` (a panic in Debug, undefined behavior in ReleaseFast) when stringifying some newer variants (for example a `bigint` in z-toml, or a `Map` in z-yaml). Consumers that `switch` exhaustively (no `else`) are not affected, because the compiler flags new variants.
 - **Reference cycles leak — pending.** An array/object that (directly or indirectly) contains a `JSValue` pointing back to itself never reaches refcount zero. There is no cycle collector in z-value; `Rc(T)` exposes an optional GC hook (`setGcHook`) so an embedder can run its own.
 - **`ZObject.prototype` is not reference-counted — pending.** It's a raw `?*Self` inherited from z-object with no lifetime management of its own — z-value does not retain or release it. If a prototype object is freed while another object still points to it, that pointer dangles. Fixing this would require z-object to become Rc-aware (or expose a generic retain/release hook).
-- **Single-threaded assumed — pending.** `Rc(T).count` is a plain `usize`, not atomic. A multi-threaded consumer would need atomics here.
-- **Unbalanced `retain()`/`deinit()` is only caught in Debug/ReleaseSafe — pending.** `Rc.decref()` asserts the count never underflows; in `ReleaseFast` that assert compiles out and the underflow is undefined behavior. Always exercise new refcounting code paths under `std.testing.allocator` in a Debug build first.
+- **Single-threaded assumed — pending.** The internal refcount `Rc(T)._count` (read it with `refCount()`) is a plain `usize`, not atomic. A multi-threaded consumer would need a separate, atomic box type.
+- **Unbalanced `retain()`/`deinit()` is only partly caught — pending.** `Rc.decref()` aborts with a panic on a release at count 0, in every build mode (ReleaseFast included since `0c8525f`). That is reliable only while the box is still allocated: a release of a box that was already freed reads freed memory and may go unnoticed. Always exercise new refcounting code paths under `std.testing.allocator` in a Debug build first.
 
 ## Installation
 
