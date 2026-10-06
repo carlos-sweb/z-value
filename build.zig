@@ -99,5 +99,35 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run.step);
     }
 
+    // Rc zero-counter check: a release at count 0 must abort with SIGABRT
+    // and the panic message in every build mode, ReleaseFast included; a
+    // balanced retain/release sequence must exit cleanly.
+    const rc_panic_cases = [_]struct { []const u8, ?[]const u8 }{
+        .{ "doubleRelease", "Rc.decref: count is 0" },
+        .{ "balanced", null },
+    };
+    inline for (rc_panic_cases) |c| {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "case", c[0]);
+        const exe = b.addExecutable(.{
+            .name = "rc_panic_" ++ c[0],
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tests/rc_panic.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        exe.root_module.addImport("zvalue", zvalue_module);
+        exe.root_module.addOptions("rc_panic_case", opts);
+        const run = b.addRunArtifact(exe);
+        if (c[1]) |msg| {
+            run.addCheck(.{ .expect_term = .{ .signal = .ABRT } });
+            run.expectStdErrMatch(msg);
+        } else {
+            run.expectExitCode(0);
+        }
+        test_step.dependOn(&run.step);
+    }
+
     b.default_step = test_step;
 }

@@ -78,12 +78,19 @@ pub fn Rc(comptime T: type) type {
         /// the caller decides how to tear down `value` (see JSValue.deinit()),
         /// since Rc(T) doesn't know whether T holds nested JSValues.
         ///
-        /// Asserts the count never underflows: an unbalanced retain()/decref()
-        /// pair is a real bug, and this turns it into a crash instead of silent
-        /// corruption — but only in Debug/ReleaseSafe builds; in ReleaseFast
-        /// this assert is compiled out and underflow is undefined behavior.
+        /// Releasing a box whose count is already 0 aborts with a panic, in
+        /// every build mode (ReleaseFast included): an unbalanced
+        /// retain()/decref() pair is a real bug, and this turns it into a
+        /// crash instead of a silent underflow. The check is reliable only
+        /// while the box memory is still allocated. A double
+        /// `JSValue.deinit()` releases a box that was already freed: it is
+        /// caught only if that memory still reads 0, and if the allocator
+        /// has reused it, the stale release corrupts another box unseen.
         pub fn decref(self: *Self) bool {
-            std.debug.assert(self.count > 0);
+            if (self.count == 0) {
+                @branchHint(.cold);
+                std.debug.panic("Rc.decref: count is {d}; release of a box with no references left (double release or unbalanced retain/decref)", .{self.count});
+            }
             self.count -= 1;
             return self.count == 0;
         }
