@@ -603,12 +603,24 @@ pub const JSValue = union(enum) {
     // replaced is released only AFTER the new one is stored, so replacing a
     // value with the same box (`o.x = o.x`) never drops its count to zero
     // midway. Each requires the matching variant (see `requireTag`).
+    //
+    // Two ownership conventions coexist, so do not mix them up:
+    //   - constructors (`new*`) and these wrappers CONSUME every JSValue
+    //     handed in, also on error: never `errdefer v.deinit()` around them.
+    //   - the raw payload APIs (`ZObject.set`/`defineProperty`, `ZMap.set`,
+    //     `ZSet.add`, `ZArray` mutators, reached through `box.value`) do NOT
+    //     consume on error: the caller still owns the value and must
+    //     release it. On success they store it without releasing anything
+    //     they overwrite or remove.
 
     /// `self[key] = value`, releasing whatever the property held before
     /// (its value, or its getter/setter if it was an accessor -- a plain set
     /// replaces an accessor with a data property). On error (frozen,
     /// non-writable, non-extensible, out of memory) `value` is released and
-    /// the property is unchanged.
+    /// the property is unchanged. `o.x = o.x` is safe: the old value is
+    /// released only after the new one is stored. Raw counterpart:
+    /// `ZObject.set`, which keeps `value` with the caller on error and never
+    /// releases the value it overwrites.
     pub fn objectSet(self: JSValue, key: []const u8, value: JSValue) ZObjectError!void {
         self.requireTag(.object, "objectSet: expected .object");
         const obj = &self.object.value;
@@ -623,7 +635,10 @@ pub const JSValue = union(enum) {
     /// Defines `key` as a data property with `descriptor`, releasing what it
     /// held before. If it was an accessor, its getter/setter slots are
     /// cleared (it becomes a data property, as in JS) and released. On error
-    /// `value` is released and the property is unchanged.
+    /// `value` is released and the property is unchanged. Redefining with
+    /// the same box is safe (old slots are released last). Raw counterpart:
+    /// `ZObject.defineProperty`, which keeps `value` with the caller on
+    /// error and releases nothing.
     pub fn objectDefine(self: JSValue, key: []const u8, value: JSValue, descriptor: PropertyDescriptor) ZObjectError!void {
         self.requireTag(.object, "objectDefine: expected .object");
         const obj = &self.object.value;
@@ -643,7 +658,9 @@ pub const JSValue = union(enum) {
 
     /// Removes own property `key` and releases its value (and getter/
     /// setter). Returns false if it wasn't there. On error (frozen,
-    /// non-configurable) nothing is removed or released.
+    /// non-configurable) nothing is removed or released. Consumes no
+    /// JSValue (the key is a plain string). Raw counterpart:
+    /// `ZObject.delete`, which removes the slot without releasing it.
     pub fn objectDelete(self: JSValue, key: []const u8) ZObjectError!bool {
         self.requireTag(.object, "objectDelete: expected .object");
         const obj = &self.object.value;
@@ -657,7 +674,8 @@ pub const JSValue = union(enum) {
     /// releasing nothing -- under the same conditions as `ZObject.clear`
     /// (a frozen object, or any non-configurable property), which are
     /// checked first so values are never released for a clear that is then
-    /// refused.
+    /// refused. Consumes no JSValue. Raw counterpart: `ZObject.clear`,
+    /// which drops the slots without releasing them.
     pub fn objectClear(self: JSValue) ZObjectError!void {
         self.requireTag(.object, "objectClear: expected .object");
         const obj = &self.object.value;
@@ -696,6 +714,10 @@ pub const JSValue = union(enum) {
     /// position and its STORED key box; the old value and the incoming
     /// (now redundant) key are released after the new value is stored. On
     /// error both `key` and `value` are released and the map is unchanged.
+    /// Passing the stored key box or the stored value box again is safe
+    /// (the caller retained it). Raw counterpart: `ZMap.set`, which keeps
+    /// `key`/`value` with the caller on error and never releases the old
+    /// value or the redundant key.
     pub fn mapSet(self: JSValue, key: JSValue, value: JSValue) ZValueError!void {
         self.requireTag(.map, "mapSet: expected .map");
         const m = &self.map.value;
@@ -713,8 +735,9 @@ pub const JSValue = union(enum) {
 
     /// Removes `key` and releases the STORED key and its value (the stored
     /// key may be a different, equal box than `key`, e.g. two "k" strings).
-    /// `key` itself is only looked up, not consumed. Returns false if the
-    /// key wasn't there.
+    /// `key` itself is only looked up, not consumed -- also when it is the
+    /// stored box. Returns false if the key wasn't there. Raw counterpart:
+    /// `ZMap.delete`, which removes the entry without releasing it.
     pub fn mapDelete(self: JSValue, key: JSValue) bool {
         self.requireTag(.map, "mapDelete: expected .map");
         const entry = self.map.value.fetchDelete(key) orelse return false;
@@ -723,7 +746,8 @@ pub const JSValue = union(enum) {
         return true;
     }
 
-    /// Removes every entry and releases every key and value.
+    /// Removes every entry and releases every key and value. Consumes no
+    /// JSValue. Raw counterpart: `ZMap.clear`, which releases nothing.
     pub fn mapClear(self: JSValue) void {
         self.requireTag(.map, "mapClear: expected .map");
         const m = &self.map.value;
@@ -733,8 +757,11 @@ pub const JSValue = union(enum) {
     }
 
     /// Adds `value` unless an equal value is already present, in which case
-    /// `value` is released (the stored one stays). On error `value` is
-    /// released and the set is unchanged.
+    /// `value` is released (the stored one stays) -- so adding the stored
+    /// box again just drops the caller's reference. On error `value` is
+    /// released and the set is unchanged. Raw counterpart: `ZSet.add`,
+    /// which keeps `value` with the caller on error and never releases a
+    /// duplicate.
     pub fn setAdd(self: JSValue, value: JSValue) ZValueError!void {
         self.requireTag(.set, "setAdd: expected .set");
         const st = &self.set.value;
@@ -750,7 +777,9 @@ pub const JSValue = union(enum) {
 
     /// Removes `value` and releases the STORED element (possibly a
     /// different, equal box). `value` itself is only looked up, not
-    /// consumed. Returns false if it wasn't there.
+    /// consumed -- also when it is the stored box. Returns false if it
+    /// wasn't there. Raw counterpart: `ZSet.delete`, which removes the
+    /// element without releasing it.
     pub fn setDelete(self: JSValue, value: JSValue) bool {
         self.requireTag(.set, "setDelete: expected .set");
         // ZSet is a ZMap(T, void) underneath; its fetchDelete hands back
@@ -760,7 +789,8 @@ pub const JSValue = union(enum) {
         return true;
     }
 
-    /// Removes every element and releases it.
+    /// Removes every element and releases it. Consumes no JSValue. Raw
+    /// counterpart: `ZSet.clear`, which releases nothing.
     pub fn setClear(self: JSValue) void {
         self.requireTag(.set, "setClear: expected .set");
         const st = &self.set.value;
