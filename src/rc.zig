@@ -14,11 +14,11 @@ const Allocator = std.mem.Allocator;
 ///
 /// Invariants:
 ///
-/// - Single-threaded. `count` is a plain `usize`, not atomic: a box (and
+/// - Single-threaded. `_count` is a plain `usize`, not atomic: a box (and
 ///   every JSValue reaching it) must stay on one thread. A multi-threaded
 ///   consumer needs a separate Arc-style type, not a flag on this one.
-/// - `count` is internal, not public API. While `JSValue.deinit()` tears
-///   a tree down, a box whose count reached zero reuses `count` as the
+/// - `_count` is internal, not public API. While `JSValue.deinit()` tears
+///   a tree down, a box whose count reached zero reuses `_count` as the
 ///   link of a pending-release list, so it can hold a pointer value instead
 ///   of 0. Consumers must not write it; use `retain()` / `JSValue.deinit()`,
 ///   and read it only through `refCount()`.
@@ -29,8 +29,9 @@ pub fn Rc(comptime T: type) type {
         const Self = @This();
 
         /// Internal refcount -- not public API, see the invariants above.
-        /// Zig has no private fields; read it through `refCount()`.
-        count: usize,
+        /// The leading underscore marks it as private (Zig has no private
+        /// fields); read it through `refCount()`.
+        _count: usize,
         allocator: Allocator,
         value: T,
         /// GC hook (optional, unused unless an embedder sets it): an opaque
@@ -47,7 +48,7 @@ pub fn Rc(comptime T: type) type {
         /// It may use the `box` address as a key (e.g. to drop a registry
         /// entry), but it must not:
         /// - read `value` (already torn down);
-        /// - read or write `count` of this or any other box (a box queued
+        /// - read or write `_count` of this or any other box (a box queued
         ///   for release holds a list link there, not a refcount);
         /// - release, retain or destroy the box that invoked it.
         gc_hook_ctx: ?*anyopaque = null,
@@ -56,7 +57,7 @@ pub fn Rc(comptime T: type) type {
         /// Takes ownership of an already-constructed `value`. count starts at 1.
         pub fn create(allocator: Allocator, value: T) !*Self {
             const box = try allocator.create(Self);
-            box.* = .{ .count = 1, .allocator = allocator, .value = value };
+            box.* = .{ ._count = 1, .allocator = allocator, .value = value };
             return box;
         }
 
@@ -88,12 +89,12 @@ pub fn Rc(comptime T: type) type {
         /// meaningful once the count has reached zero (see the invariants
         /// above).
         pub fn refCount(self: *const Self) usize {
-            return self.count;
+            return self._count;
         }
 
         /// Increments the refcount. Returns self so call sites can chain.
         pub fn retain(self: *Self) *Self {
-            self.count += 1;
+            self._count += 1;
             return self;
         }
 
@@ -110,12 +111,12 @@ pub fn Rc(comptime T: type) type {
         /// caught only if that memory still reads 0, and if the allocator
         /// has reused it, the stale release corrupts another box unseen.
         pub fn decref(self: *Self) bool {
-            if (self.count == 0) {
+            if (self._count == 0) {
                 @branchHint(.cold);
-                std.debug.panic("Rc.decref: count is {d}; release of a box with no references left (double release or unbalanced retain/decref)", .{self.count});
+                std.debug.panic("Rc.decref: count is {d}; release of a box with no references left (double release or unbalanced retain/decref)", .{self._count});
             }
-            self.count -= 1;
-            return self.count == 0;
+            self._count -= 1;
+            return self._count == 0;
         }
 
         /// Frees the box itself. Call only after `value` has already been

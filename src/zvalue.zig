@@ -460,7 +460,7 @@ pub const JSValue = union(enum) {
 
     /// Container boxes whose refcount just reached zero but whose children
     /// have not been released yet: one intrusive singly-linked list per
-    /// container type. The link lives in the box's own `count` field, which
+    /// container type. The link lives in the box's own `_count` field, which
     /// is dead once it reaches zero (nothing reads it again before
     /// `destroy()`), so queueing a box needs no memory at all -- and each
     /// list being homogeneous means no type tag has to be stored alongside
@@ -482,15 +482,15 @@ pub const JSValue = union(enum) {
         proxy: ?*Rc(Proxy) = null,
 
         fn push(self: *PendingRelease, comptime tag: []const u8, box: @typeInfo(@FieldType(PendingRelease, tag)).optional.child) void {
-            std.debug.assert(box.count == 0);
-            box.count = if (@field(self, tag)) |head| @intFromPtr(head) else 0;
+            std.debug.assert(box._count == 0);
+            box._count = if (@field(self, tag)) |head| @intFromPtr(head) else 0;
             @field(self, tag) = box;
         }
 
         fn pop(self: *PendingRelease, comptime tag: []const u8) @FieldType(PendingRelease, tag) {
             const box = @field(self, tag) orelse return null;
-            @field(self, tag) = if (box.count == 0) null else @ptrFromInt(box.count);
-            box.count = 0;
+            @field(self, tag) = if (box._count == 0) null else @ptrFromInt(box._count);
+            box._count = 0;
             return box;
         }
 
