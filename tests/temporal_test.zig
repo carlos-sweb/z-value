@@ -5,7 +5,7 @@ const JSValue = zvalue.JSValue;
 const ztemporal = @import("ztemporal");
 
 test "newTemporal wraps a PlainDate, typeof is \"object\"" {
-    const pd = try ztemporal.PlainDate.create(2024, 6, 15, .constrain);
+    const pd = try ztemporal.PlainDate.init(2024, 6, 15, null);
     const v = try JSValue.newTemporal(testing.allocator, .{ .plain_date = pd });
     defer v.deinit();
     try testing.expectEqualStrings("object", v.typeOf());
@@ -24,10 +24,10 @@ test "temporal value: retain twice, deinit twice, no leak" {
 }
 
 test "two Temporal instances with the same value are never strictly equal (identity semantics)" {
-    const a_val = try ztemporal.PlainDate.create(2024, 1, 1, .constrain);
+    const a_val = try ztemporal.PlainDate.init(2024, 1, 1, null);
     const a = try JSValue.newTemporal(testing.allocator, .{ .plain_date = a_val });
     defer a.deinit();
-    const b_val = try ztemporal.PlainDate.create(2024, 1, 1, .constrain);
+    const b_val = try ztemporal.PlainDate.init(2024, 1, 1, null);
     const b = try JSValue.newTemporal(testing.allocator, .{ .plain_date = b_val });
     defer b.deinit();
     try testing.expect(!zvalue.equality.strictEquals(a, b));

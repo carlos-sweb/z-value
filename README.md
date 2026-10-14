@@ -1,9 +1,9 @@
 # Z-Value
 
-[![Zig Version](https://img.shields.io/badge/zig-0.16-orange.svg)](https://ziglang.org/)
+[![Zig Version](https://img.shields.io/badge/zig-0.17.0-orange.svg)](https://ziglang.org/)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
-**Z-Value** is a reference-counted, tagged-union `JSValue` type for the [z-*](https://github.com/carlos-sweb) micro-library ecosystem written in Zig 0.16. It is the piece that connects the independent, statically-typed ECMAScript primitives — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [z-string](https://github.com/carlos-sweb/z-string), [zregex](https://github.com/carlos-sweb/z-regex), [z-symbol](https://github.com/carlos-sweb/z-symbol), [z-map](https://github.com/carlos-sweb/z-map), [z-set](https://github.com/carlos-sweb/z-set), [z-error](https://github.com/carlos-sweb/z-error), [z-date](https://github.com/carlos-sweb/z-date), [z-promise](https://github.com/carlos-sweb/z-promise), [z-bigint](https://github.com/carlos-sweb/z-bigint), [z-buffer](https://github.com/carlos-sweb/z-buffer), [z-temporal](https://github.com/carlos-sweb/z-temporal) — into something that can actually represent a heterogeneous JS value: a variable, an array element, or an object property that can be a number today and a string tomorrow.
+**Z-Value** is a reference-counted, tagged-union `JSValue` type for the [z-*](https://github.com/carlos-sweb) micro-library ecosystem written in Zig 0.17.0. It is the piece that connects the independent, statically-typed ECMAScript primitives — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [z-string](https://github.com/carlos-sweb/z-string), [zregex](https://github.com/carlos-sweb/z-regex), [z-symbol](https://github.com/carlos-sweb/z-symbol), [z-map](https://github.com/carlos-sweb/z-map), [z-set](https://github.com/carlos-sweb/z-set), [z-error](https://github.com/carlos-sweb/z-error), [z-date](https://github.com/carlos-sweb/z-date), [z-promise](https://github.com/carlos-sweb/z-promise), [z-bigint](https://github.com/carlos-sweb/z-bigint), [z-buffer](https://github.com/carlos-sweb/z-buffer), [z-temporal](https://github.com/carlos-sweb/z-temporal) — into something that can actually represent a heterogeneous JS value: a variable, an array element, or an object property that can be a number today and a string tomorrow.
 
 [Spanish version (may lag behind this file)](README.es.md)
 
@@ -12,7 +12,7 @@
 *As of 2026-10-06, `master` at commit `a509591` (version `0.1.0` in `build.zig.zon`).*
 
 - **21 variants**, all functional: 4 inline (`undefined`, `null`, `boolean`, `number`) and 17 reference-counted (see [Variant support](#variant-support)).
-- **Test suite:** 148 tests and 69 build steps, all passing (`zig build test`). The build steps include separate processes that check the panics described below.
+- **Test suite:** 148 tests and 70 build steps, all passing (`zig build test`). The build steps include separate processes that check the panics described below.
 - **Fixed since the previous version:** allocation failures no longer leak memory. Every constructor and every `clone*()` helper now releases what it already built when an allocation fails, and constructors that take ownership of their inputs now consume them on failure too (see [Constructors: Ownership Contract](#constructors-ownership-contract)). This closes the long-standing leak in `newString()` and the same defect in 10 other constructors and all 5 clone helpers. 17 new out-of-memory tests cover every allocation point (97 → 114 tests).
 - **Changed since commit `2546893`:**
   - `deinit()` and `typeOf()` are iterative: nesting depth costs no native stack.
@@ -167,7 +167,7 @@ Run the whole suite (148 tests) with:
 zig build test
 ```
 
-The sibling repositories listed in [Installation](#installation) must be checked out next to this one (`../z-array`, `../z-object`, …).
+Zig downloads all dependencies from GitHub; sibling checkouts are not required.
 
 ## Variant support
 
@@ -205,28 +205,80 @@ Each item is marked **pending** (known, no fix scheduled yet) or **will be addre
 - **Single-threaded assumed — pending.** The internal refcount `Rc(T)._count` (read it with `refCount()`) is a plain `usize`, not atomic. A multi-threaded consumer would need a separate, atomic box type.
 - **Unbalanced `retain()`/`deinit()` is only partly caught — pending.** `Rc.decref()` aborts with a panic on a release at count 0, in every build mode (ReleaseFast included since `0c8525f`). That is reliable only while the box is still allocated: a release of a box that was already freed reads freed memory and may go unnoticed. Always exercise new refcounting code paths under `std.testing.allocator` in a Debug build first.
 
+## API documentation
+
+Requires **Zig 0.17.0**. Browse the [Zig API documentation](https://carlos-sweb.github.io/z-value/), generated directly from the public source declarations and comments.
+
+Generate it locally with:
+
+```sh
+zig build docs
+python3 -m http.server 8000 --directory zig-out/docs
+```
+
+Open `http://localhost:8000/`. The `API documentation` GitHub Actions workflow runs tests, generates the docs, and publishes them to GitHub Pages on every push to `master`.
+
 ## Installation
 
-Sibling repos are resolved as local paths in `build.zig.zon` (swap for `zig fetch --save git+...` once tagged releases exist):
+All dependencies use tagged GitHub releases with verified hashes in `build.zig.zon`:
 ```zig
 .dependencies = .{
-    .zarray = .{ .path = "../z-array" },
-    .zobject = .{ .path = "../z-object" },
-    .zregex = .{ .path = "../z-regex" },
-    .zstring = .{ .path = "../z-string" },
-    .zsymbol = .{ .path = "../z-symbol" },
-    .zmap = .{ .path = "../z-map" },
-    .zset = .{ .path = "../z-set" },
-    .zerror = .{ .path = "../z-error" },
-    .zdate = .{ .path = "../z-date" },
-    .zpromise = .{ .path = "../z-promise" },
-    .zbigint = .{ .path = "../z-bigint" },
-    .zbuffer = .{ .path = "../z-buffer" },
-    .ztemporal = .{ .path = "../z-temporal" },
+    .zarray = .{
+        .url = "https://github.com/carlos-sweb/z-array/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zarray-0.1.0--NF-nREsAgCIst1d1GpxPxSW9kD23R9YsHfLFutfI3BI",
+    },
+    .zobject = .{
+        .url = "https://github.com/carlos-sweb/z-object/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zobject-0.1.0-dBSRhEALAgBp6grSV2T8Xv5jJ5fuP6jEKxssv0WzYHfI",
+    },
+    .zregex = .{
+        .url = "https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.9.1.tar.gz",
+        .hash = "zregex-0.9.1-c2ExG-nXtQC7-ZMaj_xLvyK4lGk4qSYJIQVlp-umRsBh",
+    },
+    .zstring = .{
+        .url = "https://github.com/carlos-sweb/z-string/archive/refs/tags/v0.4.1.tar.gz",
+        .hash = "z_string-0.4.1-_tPTB3qvcgCABVSF3Nw8kUjZglYyXpnEZVJWWKlZETJL",
+    },
+    .zsymbol = .{
+        .url = "https://github.com/carlos-sweb/z-symbol/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zsymbol-0.1.0--_-46A5FAADblMb_Etysuux6m0d6eekqqGcosK9eoVoC",
+    },
+    .zmap = .{
+        .url = "https://github.com/carlos-sweb/z-map/archive/refs/tags/0.1.0.tar.gz",
+        .hash = "zmap-0.1.0-rJUj4vovAABdj36zmPiFpDaj-FNuOg171FhdYOPPO_qg",
+    },
+    .zset = .{
+        .url = "https://github.com/carlos-sweb/z-set/archive/refs/tags/0.1.0.tar.gz",
+        .hash = "zset-0.1.0-wFuBtLQuAACmEGDqSGAPvhEHNqkVbwVEWf6gDmrRKomb",
+    },
+    .zerror = .{
+        .url = "https://github.com/carlos-sweb/z-error/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zerror-0.1.0-bDg2UR8zAABuBVoyyvyYhoJsjYDE2oNWsillDSp_9gzo",
+    },
+    .zdate = .{
+        .url = "https://github.com/carlos-sweb/z-date/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zdate-0.1.0-f1RpEfhuGwBUqJ87i0el4VP-9O2z8x7XIJP9fwWH8BvA",
+    },
+    .zpromise = .{
+        .url = "https://github.com/carlos-sweb/z-promise/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zpromise-0.1.0-y0pjffwoAAD6EpxTPIleE2tiU9RuUbKbDIz-iotebE_u",
+    },
+    .zbigint = .{
+        .url = "https://github.com/carlos-sweb/z-bigint/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zbigint-0.1.0-PA8m8TgNAQDF0cJPy3JN67NMRsXgqJUCJlEatiV66rMQ",
+    },
+    .zbuffer = .{
+        .url = "https://github.com/carlos-sweb/z-buffer/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zbuffer-0.1.0-bUHCsDXIAAB1Yt5RcFhEApi6XO8NeV32ia8WvM3QttNv",
+    },
+    .ztemporal = .{
+        .url = "https://github.com/carlos-sweb/z-temporal/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "ztemporal-0.1.0-9l_8_jt7BgDitcgR0ACQLBddaQqIK4nfJAEEDvNKDs5Z",
+    },
 },
 ```
 
-Two more repos are needed transitively and must also be checked out next to this one: [z-equality](https://github.com/carlos-sweb/z-equality) (used by z-array and z-map) and [z-number](https://github.com/carlos-sweb/z-number) (used by z-string).
+Transitive dependencies, including [z-equality](https://github.com/carlos-sweb/z-equality) and [z-number](https://github.com/carlos-sweb/z-number), are also downloaded automatically by Zig.
 
 ## Project Structure
 

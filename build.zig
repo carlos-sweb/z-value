@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// Every sibling z-* dependency's package name matches its module name
+// Each dependency key maps to the public module name
 // (e.g. "zarray" -> module "zarray") -- one list drives the dependency
 // fetch, the module lookup, and every addImport call site below, so a
 // new dependency only needs one line added here.
@@ -22,10 +22,20 @@ pub fn build(b: *std.Build) void {
 
     const zvalue_module = b.addModule("zvalue", .{
         .root_source_file = b.path("src/zvalue.zig"),
+        .target = target,
+        .optimize = optimize,
     });
     inline for (dep_names, 0..) |name, i| {
         zvalue_module.addImport(name, dep_modules[i]);
     }
+
+    const docs_object = b.addObject(.{ .name = "zvalue", .root_module = zvalue_module });
+    const docs_install = b.addInstallDirectory(.{
+        .source_dir = docs_object.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    b.step("docs", "Generate Zig API documentation in zig-out/docs").dependOn(&docs_install.step);
 
     const test_step = b.step("test", "Run all tests");
 

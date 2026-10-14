@@ -1,9 +1,9 @@
 # Z-Value
 
-[![Versión de Zig](https://img.shields.io/badge/zig-0.16-orange.svg)](https://ziglang.org/)
+[![Versión de Zig](https://img.shields.io/badge/zig-0.17.0-orange.svg)](https://ziglang.org/)
 [![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](LICENSE)
 
-**Z-Value** es un tipo `JSValue` de unión etiquetada con conteo de referencias, para el ecosistema de micro-librerías [z-*](https://github.com/carlos-sweb) escrito en Zig 0.16. Es la pieza que conecta las primitivas ECMAScript independientes y de tipado estático — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [z-string](https://github.com/carlos-sweb/z-string), [zregex](https://github.com/carlos-sweb/z-regex), [z-symbol](https://github.com/carlos-sweb/z-symbol), [z-map](https://github.com/carlos-sweb/z-map), [z-set](https://github.com/carlos-sweb/z-set), [z-error](https://github.com/carlos-sweb/z-error), [z-date](https://github.com/carlos-sweb/z-date), [z-promise](https://github.com/carlos-sweb/z-promise), [z-bigint](https://github.com/carlos-sweb/z-bigint), [z-buffer](https://github.com/carlos-sweb/z-buffer) — en algo que realmente puede representar un valor JS heterogéneo: una variable, un elemento de array, o una propiedad de objeto que puede ser un número hoy y un string mañana.
+**Z-Value** es un tipo `JSValue` de unión etiquetada con conteo de referencias, para el ecosistema de micro-librerías [z-*](https://github.com/carlos-sweb) escrito en Zig 0.17.0. Es la pieza que conecta las primitivas ECMAScript independientes y de tipado estático — [z-array](https://github.com/carlos-sweb/z-array), [z-object](https://github.com/carlos-sweb/z-object), [z-string](https://github.com/carlos-sweb/z-string), [zregex](https://github.com/carlos-sweb/z-regex), [z-symbol](https://github.com/carlos-sweb/z-symbol), [z-map](https://github.com/carlos-sweb/z-map), [z-set](https://github.com/carlos-sweb/z-set), [z-error](https://github.com/carlos-sweb/z-error), [z-date](https://github.com/carlos-sweb/z-date), [z-promise](https://github.com/carlos-sweb/z-promise), [z-bigint](https://github.com/carlos-sweb/z-bigint), [z-buffer](https://github.com/carlos-sweb/z-buffer) — en algo que realmente puede representar un valor JS heterogéneo: una variable, un elemento de array, o una propiedad de objeto que puede ser un número hoy y un string mañana.
 
 [🇬🇧 English Version](README.md)
 
@@ -64,23 +64,76 @@ arr.deinit();    // libera la referencia propia de arr a child, recursivamente
 - **Se asume single-threaded.** `Rc(T).count` es un `usize` plano, no atómico. Un consumidor multi-hilo necesitaría atomics acá.
 - **Un `retain()`/`deinit()` desbalanceado solo se detecta en Debug/ReleaseSafe.** `Rc.decref()` verifica con assert que el contador nunca haga underflow; en `ReleaseFast` ese assert se compila afuera y el underflow es comportamiento indefinido. Ejercitá siempre rutas nuevas de refcounting bajo `std.testing.allocator` en un build Debug primero.
 
+## Documentación API
+
+Requiere **Zig 0.17.0**. Consulta la [documentación API de Zig](https://carlos-sweb.github.io/z-value/), generada directamente desde las declaraciones públicas y los comentarios del código.
+
+Para generarla localmente:
+
+```sh
+zig build docs
+python3 -m http.server 8000 --directory zig-out/docs
+```
+
+Abre `http://localhost:8000/`. El workflow `API documentation` ejecuta las pruebas, genera la documentación y la publica en GitHub Pages con cada push a `master`.
+
 ## Instalación
 
-Los repos hermanos se resuelven como paths locales en `build.zig.zon` (cambiar a `zig fetch --save git+...` cuando existan releases etiquetados):
+Todas las dependencias usan releases etiquetadas de GitHub con hashes verificados en `build.zig.zon`:
 ```zig
 .dependencies = .{
-    .zarray = .{ .path = "../z-array" },
-    .zobject = .{ .path = "../z-object" },
-    .zregex = .{ .path = "../z-regex" },
-    .zstring = .{ .path = "../z-string" },
-    .zsymbol = .{ .path = "../z-symbol" },
-    .zmap = .{ .path = "../z-map" },
-    .zset = .{ .path = "../z-set" },
-    .zerror = .{ .path = "../z-error" },
-    .zdate = .{ .path = "../z-date" },
-    .zpromise = .{ .path = "../z-promise" },
-    .zbigint = .{ .path = "../z-bigint" },
-    .zbuffer = .{ .path = "../z-buffer" },
+    .zarray = .{
+        .url = "https://github.com/carlos-sweb/z-array/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zarray-0.1.0--NF-nREsAgCIst1d1GpxPxSW9kD23R9YsHfLFutfI3BI",
+    },
+    .zobject = .{
+        .url = "https://github.com/carlos-sweb/z-object/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zobject-0.1.0-dBSRhEALAgBp6grSV2T8Xv5jJ5fuP6jEKxssv0WzYHfI",
+    },
+    .zregex = .{
+        .url = "https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.9.1.tar.gz",
+        .hash = "zregex-0.9.1-c2ExG-nXtQC7-ZMaj_xLvyK4lGk4qSYJIQVlp-umRsBh",
+    },
+    .zstring = .{
+        .url = "https://github.com/carlos-sweb/z-string/archive/refs/tags/v0.4.1.tar.gz",
+        .hash = "z_string-0.4.1-_tPTB3qvcgCABVSF3Nw8kUjZglYyXpnEZVJWWKlZETJL",
+    },
+    .zsymbol = .{
+        .url = "https://github.com/carlos-sweb/z-symbol/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zsymbol-0.1.0--_-46A5FAADblMb_Etysuux6m0d6eekqqGcosK9eoVoC",
+    },
+    .zmap = .{
+        .url = "https://github.com/carlos-sweb/z-map/archive/refs/tags/0.1.0.tar.gz",
+        .hash = "zmap-0.1.0-rJUj4vovAABdj36zmPiFpDaj-FNuOg171FhdYOPPO_qg",
+    },
+    .zset = .{
+        .url = "https://github.com/carlos-sweb/z-set/archive/refs/tags/0.1.0.tar.gz",
+        .hash = "zset-0.1.0-wFuBtLQuAACmEGDqSGAPvhEHNqkVbwVEWf6gDmrRKomb",
+    },
+    .zerror = .{
+        .url = "https://github.com/carlos-sweb/z-error/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zerror-0.1.0-bDg2UR8zAABuBVoyyvyYhoJsjYDE2oNWsillDSp_9gzo",
+    },
+    .zdate = .{
+        .url = "https://github.com/carlos-sweb/z-date/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zdate-0.1.0-f1RpEfhuGwBUqJ87i0el4VP-9O2z8x7XIJP9fwWH8BvA",
+    },
+    .zpromise = .{
+        .url = "https://github.com/carlos-sweb/z-promise/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zpromise-0.1.0-y0pjffwoAAD6EpxTPIleE2tiU9RuUbKbDIz-iotebE_u",
+    },
+    .zbigint = .{
+        .url = "https://github.com/carlos-sweb/z-bigint/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zbigint-0.1.0-PA8m8TgNAQDF0cJPy3JN67NMRsXgqJUCJlEatiV66rMQ",
+    },
+    .zbuffer = .{
+        .url = "https://github.com/carlos-sweb/z-buffer/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "zbuffer-0.1.0-bUHCsDXIAAB1Yt5RcFhEApi6XO8NeV32ia8WvM3QttNv",
+    },
+    .ztemporal = .{
+        .url = "https://github.com/carlos-sweb/z-temporal/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "ztemporal-0.1.0-9l_8_jt7BgDitcgR0ACQLBddaQqIK4nfJAEEDvNKDs5Z",
+    },
 },
 ```
 
