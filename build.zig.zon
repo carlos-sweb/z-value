@@ -17,8 +17,8 @@
             .hash = "zarray-0.1.0--NF-nUl8AgCKhSY_uLLLV-5GQG1vfsAoId5djzA34tzo",
         },
         .zobject = .{
-            .url = "https://github.com/carlos-sweb/z-object/archive/refs/tags/v0.2.0.tar.gz",
-            .hash = "zobject-0.1.0-dBSRhCEaAgAUV0NwYPaNGSba2wZ_UdazJSebX9x0gQMF",
+            .url = "https://github.com/carlos-sweb/z-object/archive/refs/tags/v0.2.1.tar.gz",
+            .hash = "zobject-0.1.0-dBSRhNAbAgCRnN3V3ZHBrEKmlJ9YzDS_XNCpG71r11qc",
         },
         .zregex = .{
             .url = "https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.9.1.tar.gz",
