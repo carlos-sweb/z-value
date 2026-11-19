@@ -45,10 +45,10 @@ test "proxy value: retain twice, deinit twice, no leak" {
     const handler = try JSValue.newObject(testing.allocator);
     const p = try JSValue.newProxy(testing.allocator, target, handler);
     const p2 = p.retain();
-    try testing.expect(p.proxy == p2.proxy);
-    try testing.expectEqual(@as(usize, 2), p.proxy.refCount());
+    try testing.expect(p.asProxy() == p2.asProxy());
+    try testing.expectEqual(@as(usize, 2), p.asProxy().refCount());
     p.deinit();
-    try testing.expectEqual(@as(usize, 1), p2.proxy.refCount());
+    try testing.expectEqual(@as(usize, 1), p2.asProxy().refCount());
     p2.deinit();
 }
 
@@ -70,8 +70,8 @@ test "two proxies over the same target/handler are never strictly equal (identit
 test "deinit releases both target and handler" {
     const target = try JSValue.newObject(testing.allocator);
     const handler = try JSValue.newObject(testing.allocator);
-    try testing.expectEqual(@as(usize, 1), target.object.refCount());
-    try testing.expectEqual(@as(usize, 1), handler.object.refCount());
+    try testing.expectEqual(@as(usize, 1), target.asObject().refCount());
+    try testing.expectEqual(@as(usize, 1), handler.asObject().refCount());
     const p = try JSValue.newProxy(testing.allocator, target, handler);
     p.deinit();
     // Nothing further to assert directly (the boxes are freed) -- this

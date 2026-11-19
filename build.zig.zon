@@ -13,8 +13,8 @@
     },
     .dependencies = .{
         .zarray = .{
-            .url = "https://github.com/carlos-sweb/z-array/archive/refs/tags/v0.2.1.tar.gz",
-            .hash = "zarray-0.1.0--NF-nUl8AgCKhSY_uLLLV-5GQG1vfsAoId5djzA34tzo",
+            .url = "https://github.com/carlos-sweb/z-array/archive/refs/tags/v0.2.2.tar.gz",
+            .hash = "zarray-0.1.0--NF-nWF8AgDOOlJG4-WFBcTJAF3boMsVfLoL2qNeE26Z",
         },
         .zobject = .{
             .url = "git+https://github.com/carlos-sweb/z-object?ref=v0.2.3#ab8804f19c283d30f92f86a456825b15b1e0e3e8",

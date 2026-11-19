@@ -23,29 +23,29 @@ test "calling a function value invokes its native call, name/arity round-trip" {
     var dummy_ctx: u8 = 0;
     const f = try JSValue.newFunction(testing.allocator, .{ .ctx = &dummy_ctx, .name = "answer", .arity = 2, .call = dummyCall });
     defer f.deinit();
-    const result = try f.function.value.call(f.function.value.ctx, testing.allocator, JSValue.UNDEFINED, &.{});
-    try testing.expect(result.number == 42);
-    try testing.expectEqualStrings("answer", f.function.value.name);
-    try testing.expectEqual(@as(usize, 2), f.function.value.arity);
+    const result = try f.asFunction().value.call(f.asFunction().value.ctx, testing.allocator, JSValue.UNDEFINED, &.{});
+    try testing.expect(result.asNumber() == 42);
+    try testing.expectEqualStrings("answer", f.asFunction().value.name);
+    try testing.expectEqual(@as(usize, 2), f.asFunction().value.arity);
 }
 
 test "function value: retain twice, deinit twice, no leak" {
     var dummy_ctx: u8 = 0;
     const f = try JSValue.newFunction(testing.allocator, .{ .ctx = &dummy_ctx, .call = dummyCall });
     const f2 = f.retain();
-    try testing.expect(f.function == f2.function);
-    try testing.expectEqual(@as(usize, 2), f.function.refCount());
+    try testing.expect(f.asFunction() == f2.asFunction());
+    try testing.expectEqual(@as(usize, 2), f.asFunction().refCount());
 
     f.deinit();
-    try testing.expectEqual(@as(usize, 1), f2.function.refCount());
+    try testing.expectEqual(@as(usize, 1), f2.asFunction().refCount());
     f2.deinit();
 }
 
 test "function value: deinit releases its prototype and statics (no leak)" {
     var dummy_ctx: u8 = 0;
     const f = try JSValue.newFunction(testing.allocator, .{ .ctx = &dummy_ctx, .call = dummyCall });
-    f.function.value.prototype = try JSValue.newObject(testing.allocator);
-    f.function.value.statics = try JSValue.newObject(testing.allocator);
+    f.asFunction().value.prototype = try JSValue.newObject(testing.allocator);
+    f.asFunction().value.statics = try JSValue.newObject(testing.allocator);
     // No `defer` on the prototype/statics themselves -- deinit() below must
     // release them (Callable.deinit() used to be a no-op); testing.allocator
     // fails the test if anything's left unfreed.

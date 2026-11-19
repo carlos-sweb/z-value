@@ -7,16 +7,16 @@ test "newDate wraps a millisecond timestamp, typeof is \"object\"" {
     const d = try JSValue.newDate(testing.allocator, 86400000);
     defer d.deinit();
     try testing.expectEqualStrings("object", d.typeOf());
-    try testing.expectEqual(@as(i64, 86400000), d.date.value.getTime());
+    try testing.expectEqual(@as(i64, 86400000), d.asDate().value.getTime());
 }
 
 test "date value: retain twice, deinit twice, no leak" {
     const d = try JSValue.newDate(testing.allocator, 0);
     const d2 = d.retain();
-    try testing.expect(d.date == d2.date);
-    try testing.expectEqual(@as(usize, 2), d.date.refCount());
+    try testing.expect(d.asDate() == d2.asDate());
+    try testing.expectEqual(@as(usize, 2), d.asDate().refCount());
     d.deinit();
-    try testing.expectEqual(@as(usize, 1), d2.date.refCount());
+    try testing.expectEqual(@as(usize, 1), d2.asDate().refCount());
     d2.deinit();
 }
 
@@ -32,5 +32,5 @@ test "two dates with the same timestamp are never strictly equal (identity seman
 test "out-of-range timestamps become Invalid Date (getters yield null)" {
     const d = try JSValue.newDate(testing.allocator, std.math.maxInt(i64));
     defer d.deinit();
-    try testing.expect(d.date.value.getFullYear() == null);
+    try testing.expect(d.asDate().value.getFullYear() == null);
 }

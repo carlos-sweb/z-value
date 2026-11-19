@@ -11,18 +11,18 @@ test "string value: single owner, deinit frees" {
 test "string value: retain twice, deinit twice, no leak" {
     const s = try JSValue.newString(testing.allocator, "hello");
     const s2 = s.retain();
-    try testing.expect(s.string == s2.string);
-    try testing.expectEqual(@as(usize, 2), s.string.refCount());
+    try testing.expect(s.asString() == s2.asString());
+    try testing.expectEqual(@as(usize, 2), s.asString().refCount());
 
     s.deinit();
-    try testing.expectEqual(@as(usize, 1), s2.string.refCount());
+    try testing.expectEqual(@as(usize, 1), s2.asString().refCount());
     s2.deinit();
 }
 
 test "string value: content is preserved" {
     const s = try JSValue.newString(testing.allocator, "hola mundo");
     defer s.deinit();
-    try testing.expectEqualStrings("hola mundo", s.string.value.data);
+    try testing.expectEqualStrings("hola mundo", s.asString().value.data);
 }
 
 test "string value: uses real ZString UTF-16 semantics, not a raw byte count" {
@@ -31,7 +31,7 @@ test "string value: uses real ZString UTF-16 semantics, not a raw byte count" {
     // never against a naive byte-length placeholder.
     const s = try JSValue.newString(testing.allocator, "\u{1F600}");
     defer s.deinit();
-    try testing.expectEqual(@as(usize, 2), s.string.value.length());
+    try testing.expectEqual(@as(usize, 2), s.asString().value.length());
 }
 
 test "retain on value types is a no-op (no box to touch)" {
@@ -39,7 +39,7 @@ test "retain on value types is a no-op (no box to touch)" {
     const n2 = n.retain();
     n.deinit();
     n2.deinit();
-    try testing.expect(n2.number == 1.0);
+    try testing.expect(n2.asNumber() == 1.0);
 }
 
 // An unbalanced deinit() (releasing more times than retained) trips the
@@ -88,10 +88,10 @@ test "GC hook still fires exactly once per box during an iterative release" {
     for (0..depth) |_| {
         const outer = try JSValue.newArray(testing.allocator);
         outer.setGcHook(&counter, HookCounter.hook);
-        _ = try outer.array.value.push(cur);
+        _ = try outer.asArray().value.push(cur);
         const leaf = try JSValue.newString(testing.allocator, "x");
         leaf.setGcHook(&counter, HookCounter.hook);
-        _ = try outer.array.value.push(leaf);
+        _ = try outer.asArray().value.push(leaf);
         cur = outer;
     }
     cur.deinit();
