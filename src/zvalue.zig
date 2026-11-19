@@ -24,8 +24,8 @@ pub const DataViewBox = @import("data_view_box.zig").DataViewBox;
 pub const TypedArrayBox = @import("typed_array_box.zig").TypedArrayBox;
 pub const TypedKind = @import("typed_array_box.zig").TypedKind;
 
-const ZArray = zarray.ZArray;
-const ZObject = zobject.ZObject;
+pub const ZArray = zarray.ZArray;
+pub const ZObject = zobject.ZObject;
 const Regex = zregex.Regex;
 const ZString = zstring.ZString;
 const ZSymbol = zsymbol.ZSymbol;
@@ -52,8 +52,13 @@ pub const JSValue = extern struct {
     }
 
     pub const CANONICAL_NAN: u64 = 0x7FF8_0000_0000_0000;
+    pub const BASE_TAG: u64 = 0xFFF9_0000_0000_0000;
+    pub const HEAP_BASE: u64 = 0xFFF9_8000_0000_0000;
     pub const PTR_MASK: u64 = 0x0000_7FFF_FFFF_FFFF;
+    pub const ALIGNED_PTR_MASK: u64 = 0x0000_7FFF_FFFF_FFF8;
     pub const HEADER_MASK: u64 = 0xFFFF_8000_0000_0000;
+    pub const TAG15_MASK: u64 = HEADER_MASK | 7;
+    pub const BASE_HEADER17: u17 = @intCast(0xFFF8_0000_0000_0000 >> 47);
 
     pub const Tag = enum(u5) {
         number = 0,
@@ -103,22 +108,44 @@ pub const JSValue = extern struct {
         temporal: *Rc(TemporalValue),
     };
 
-    pub inline fn makeHeader(t: Tag) u64 {
-        const raw: u5 = @intFromEnum(t);
-        const sign: u64 = @as(u64, (raw >> 4) & 1) << 63;
-        const tag_field: u64 = @as(u64, raw & 0xF) << 47;
-        return sign | 0x7FF8_0000_0000_0000 | tag_field;
+    inline fn makeHeader4(comptime tag4: u4) u64 {
+        return 0xFFF8_0000_0000_0000 | (@as(u64, tag4) << 47);
+    }
+
+    inline fn header17(comptime tag4: u4) u17 {
+        return BASE_HEADER17 | @as(u17, tag4);
     }
 
     pub inline fn fromHeap(comptime t: Tag, ptr: anytype) JSValue {
         const raw = @intFromPtr(ptr);
         std.debug.assert(raw <= PTR_MASK);
-        return .{ .bits = makeHeader(t) | raw };
+        std.debug.assert((raw & 7) == 0);
+        const h: u64 = switch (t) {
+            .object => makeHeader4(3),
+            .array => makeHeader4(4),
+            .string => makeHeader4(5),
+            .function => makeHeader4(6),
+            .symbol => makeHeader4(7),
+            .bigint => makeHeader4(8),
+            .regex => makeHeader4(9),
+            .map => makeHeader4(10),
+            .set => makeHeader4(11),
+            .date => makeHeader4(12),
+            .@"error" => makeHeader4(13),
+            .promise => makeHeader4(14),
+            .typed_array => makeHeader4(15) | 0,
+            .array_buffer => makeHeader4(15) | 1,
+            .proxy => makeHeader4(15) | 2,
+            .data_view => makeHeader4(15) | 3,
+            .temporal => makeHeader4(15) | 4,
+            else => unreachable,
+        };
+        return .{ .bits = h | raw };
     }
 
-    pub const TAG_UNDEFINED: u64 = makeHeader(.undefined);
-    pub const TAG_NULL: u64 = makeHeader(.null);
-    pub const TAG_BOOLEAN_BASE: u64 = makeHeader(.boolean);
+    pub const TAG_UNDEFINED: u64 = BASE_TAG | 0;
+    pub const TAG_NULL: u64 = BASE_TAG | 1;
+    pub const TAG_BOOLEAN_BASE: u64 = BASE_TAG | 2;
     pub const TAG_FALSE: u64 = TAG_BOOLEAN_BASE;
     pub const TAG_TRUE: u64 = TAG_BOOLEAN_BASE | 1;
 
@@ -135,7 +162,11 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn fromNumber(value: f64) JSValue {
-        if (std.math.isNan(value)) return .{ .bits = CANONICAL_NAN };
+        const b: u64 = @bitCast(value);
+        return .{ .bits = if (b >= BASE_TAG) CANONICAL_NAN else b };
+    }
+
+    pub inline fn fromNumberFast(value: f64) JSValue {
         return .{ .bits = @bitCast(value) };
     }
 
@@ -234,7 +265,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isNumber(self: JSValue) bool {
-        return self.bits == CANONICAL_NAN or (self.bits & 0x7FF8_0000_0000_0000) != 0x7FF8_0000_0000_0000;
+        return self.bits < BASE_TAG;
     }
 
     pub inline fn asNumber(self: JSValue) f64 {
@@ -242,11 +273,36 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn tag(self: JSValue) Tag {
-        if (self.isNumber()) return .number;
-        const sign: u5 = @intCast((self.bits >> 63) & 1);
-        const field: u5 = @intCast((self.bits >> 47) & 0xF);
-        const raw: u5 = (sign << 4) | field;
-        return @enumFromInt(raw);
+        if (self.bits < BASE_TAG) return .number;
+        const tag4: u4 = @intCast((self.bits >> 47) & 0xF);
+        return switch (tag4) {
+            0, 1 => unreachable,
+            2 => switch (@as(u2, @truncate(self.bits))) {
+                0 => .undefined,
+                1 => .null,
+                2, 3 => .boolean,
+            },
+            3 => .object,
+            4 => .array,
+            5 => .string,
+            6 => .function,
+            7 => .symbol,
+            8 => .bigint,
+            9 => .regex,
+            10 => .map,
+            11 => .set,
+            12 => .date,
+            13 => .@"error",
+            14 => .promise,
+            15 => switch (@as(u3, @truncate(self.bits))) {
+                0 => .typed_array,
+                1 => .array_buffer,
+                2 => .proxy,
+                3 => .data_view,
+                4 => .temporal,
+                else => unreachable,
+            },
+        };
     }
 
     pub inline fn isUndefined(self: JSValue) bool {
@@ -266,7 +322,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isString(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.string);
+        return (self.bits >> 47) == header17(5);
     }
 
     pub inline fn asString(self: JSValue) *Rc(ZString) {
@@ -274,7 +330,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isArray(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.array);
+        return (self.bits >> 47) == header17(4);
     }
 
     pub inline fn asArray(self: JSValue) *Rc(ZArray(JSValue)) {
@@ -282,7 +338,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isObject(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.object);
+        return (self.bits >> 47) == header17(3);
     }
 
     pub inline fn asObject(self: JSValue) *Rc(ZObject(JSValue)) {
@@ -290,7 +346,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isRegex(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.regex);
+        return (self.bits >> 47) == header17(9);
     }
 
     pub inline fn asRegex(self: JSValue) *Rc(Regex) {
@@ -298,7 +354,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isSymbol(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.symbol);
+        return (self.bits >> 47) == header17(7);
     }
 
     pub inline fn asSymbol(self: JSValue) *Rc(ZSymbol) {
@@ -306,7 +362,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isMap(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.map);
+        return (self.bits >> 47) == header17(10);
     }
 
     pub inline fn asMap(self: JSValue) *Rc(ZMap(JSValue, JSValue)) {
@@ -314,7 +370,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isSet(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.set);
+        return (self.bits >> 47) == header17(11);
     }
 
     pub inline fn asSet(self: JSValue) *Rc(ZSet(JSValue)) {
@@ -322,7 +378,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isError(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.@"error");
+        return (self.bits >> 47) == header17(13);
     }
 
     pub inline fn asError(self: JSValue) *Rc(ZError(JSValue)) {
@@ -330,7 +386,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isFunction(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.function);
+        return (self.bits >> 47) == header17(6);
     }
 
     pub inline fn asFunction(self: JSValue) *Rc(Callable) {
@@ -338,7 +394,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isDate(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.date);
+        return (self.bits >> 47) == header17(12);
     }
 
     pub inline fn asDate(self: JSValue) *Rc(ZDate) {
@@ -346,7 +402,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isPromise(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.promise);
+        return (self.bits >> 47) == header17(14);
     }
 
     pub inline fn asPromise(self: JSValue) *Rc(ZPromise(JSValue)) {
@@ -354,7 +410,7 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isBigInt(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.bigint);
+        return (self.bits >> 47) == header17(8);
     }
 
     pub inline fn asBigInt(self: JSValue) *Rc(ZBigInt) {
@@ -362,48 +418,47 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn isProxy(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.proxy);
+        return (self.bits & TAG15_MASK) == (makeHeader4(15) | 2);
     }
 
     pub inline fn asProxy(self: JSValue) *Rc(Proxy) {
-        return @ptrFromInt(self.bits & PTR_MASK);
+        return @ptrFromInt(self.bits & ALIGNED_PTR_MASK);
     }
 
     pub inline fn isArrayBuffer(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.array_buffer);
+        return (self.bits & TAG15_MASK) == (makeHeader4(15) | 1);
     }
 
     pub inline fn asArrayBuffer(self: JSValue) *Rc(ArrayBuffer) {
-        return @ptrFromInt(self.bits & PTR_MASK);
+        return @ptrFromInt(self.bits & ALIGNED_PTR_MASK);
     }
 
     pub inline fn isDataView(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.data_view);
+        return (self.bits & TAG15_MASK) == (makeHeader4(15) | 3);
     }
 
     pub inline fn asDataView(self: JSValue) *Rc(DataViewBox) {
-        return @ptrFromInt(self.bits & PTR_MASK);
+        return @ptrFromInt(self.bits & ALIGNED_PTR_MASK);
     }
 
     pub inline fn isTypedArray(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.typed_array);
+        return (self.bits & TAG15_MASK) == (makeHeader4(15) | 0);
     }
 
     pub inline fn asTypedArray(self: JSValue) *Rc(TypedArrayBox) {
-        return @ptrFromInt(self.bits & PTR_MASK);
+        return @ptrFromInt(self.bits & ALIGNED_PTR_MASK);
     }
 
     pub inline fn isTemporal(self: JSValue) bool {
-        return (self.bits & HEADER_MASK) == makeHeader(.temporal);
+        return (self.bits & TAG15_MASK) == (makeHeader4(15) | 4);
     }
 
     pub inline fn asTemporal(self: JSValue) *Rc(TemporalValue) {
-        return @ptrFromInt(self.bits & PTR_MASK);
+        return @ptrFromInt(self.bits & ALIGNED_PTR_MASK);
     }
 
     pub inline fn needsDeinit(self: JSValue) bool {
-        if (self.isNumber()) return false;
-        return @intFromEnum(self.tag()) >= 4;
+        return self.bits >= HEAP_BASE;
     }
 
     pub inline fn toBoolean(self: JSValue) bool {
@@ -415,6 +470,9 @@ pub const JSValue = extern struct {
         }
         if (self.isString()) {
             return self.asString().value.data.len > 0;
+        }
+        if (self.isBigInt()) {
+            return !self.asBigInt().value.isZero();
         }
         return true;
     }
@@ -619,29 +677,50 @@ pub const JSValue = extern struct {
     }
 
     pub inline fn retain(self: JSValue) JSValue {
-        if (self.needsDeinit()) {
-            switch (self.tag()) {
-                .string => _ = self.asString().retain(),
-                .array => _ = self.asArray().retain(),
-                .object => _ = self.asObject().retain(),
-                .regex => _ = self.asRegex().retain(),
-                .symbol => _ = self.asSymbol().retain(),
-                .map => _ = self.asMap().retain(),
-                .set => _ = self.asSet().retain(),
-                .@"error" => _ = self.asError().retain(),
-                .function => _ = self.asFunction().retain(),
-                .date => _ = self.asDate().retain(),
-                .promise => _ = self.asPromise().retain(),
-                .bigint => _ = self.asBigInt().retain(),
-                .proxy => _ = self.asProxy().retain(),
-                .array_buffer => _ = self.asArrayBuffer().retain(),
-                .data_view => _ = self.asDataView().retain(),
-                .typed_array => _ = self.asTypedArray().retain(),
-                .temporal => _ = self.asTemporal().retain(),
-                else => {},
-            }
+        if (!self.needsDeinit()) return self;
+        const h = self.bits >> 47;
+        if (h == header17(3)) {
+            _ = self.asObject().retain();
+            return self;
         }
+        if (h == header17(4)) {
+            _ = self.asArray().retain();
+            return self;
+        }
+        if (h == header17(5)) {
+            _ = self.asString().retain();
+            return self;
+        }
+        self.retainSlow();
         return self;
+    }
+
+    noinline fn retainSlow(self: JSValue) void {
+        @branchHint(.cold);
+        const tag4: u4 = @truncate(self.bits >> 47);
+        switch (tag4) {
+            0, 1, 2 => unreachable,
+            3 => _ = self.asObject().retain(),
+            4 => _ = self.asArray().retain(),
+            5 => _ = self.asString().retain(),
+            6 => _ = self.asFunction().retain(),
+            7 => _ = self.asSymbol().retain(),
+            8 => _ = self.asBigInt().retain(),
+            9 => _ = self.asRegex().retain(),
+            10 => _ = self.asMap().retain(),
+            11 => _ = self.asSet().retain(),
+            12 => _ = self.asDate().retain(),
+            13 => _ = self.asError().retain(),
+            14 => _ = self.asPromise().retain(),
+            15 => switch (@as(u3, @truncate(self.bits))) {
+                0 => _ = self.asTypedArray().retain(),
+                1 => _ = self.asArrayBuffer().retain(),
+                2 => _ = self.asProxy().retain(),
+                3 => _ = self.asDataView().retain(),
+                4 => _ = self.asTemporal().retain(),
+                else => unreachable,
+            },
+        }
     }
 
     pub fn setGcHook(self: JSValue, ctx: *anyopaque, hook: *const fn (ctx: *anyopaque, box: *anyopaque) void) void {
@@ -668,7 +747,37 @@ pub const JSValue = extern struct {
         }
     }
 
-    pub fn deinit(self: JSValue) void {
+    pub inline fn deinit(self: JSValue) void {
+        if (!self.needsDeinit()) return;
+        self.deinitHeap();
+    }
+
+    fn deinitHeap(self: JSValue) void {
+        const h = self.bits >> 47;
+        if (h == header17(3)) {
+            const box = self.asObject();
+            if (box._count > 1) {
+                box._count -= 1;
+                return;
+            }
+        } else if (h == header17(4)) {
+            const box = self.asArray();
+            if (box._count > 1) {
+                box._count -= 1;
+                return;
+            }
+        } else if (h == header17(5)) {
+            const box = self.asString();
+            if (box._count > 1) {
+                box._count -= 1;
+                return;
+            }
+        }
+        self.deinitSlow();
+    }
+
+    noinline fn deinitSlow(self: JSValue) void {
+        @branchHint(.cold);
         var pending: PendingRelease = .{};
         self.releaseInto(&pending);
         pending.drain();

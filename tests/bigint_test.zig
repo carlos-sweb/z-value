@@ -117,3 +117,19 @@ test "newBigIntFromValue: OOM releases the handed-over ZBigInt" {
         break;
     }
 }
+
+test "toBoolean returns false for 0n and true for non-zero bigints" {
+    const zero = try JSValue.newBigInt(testing.allocator, "0");
+    defer zero.deinit();
+    const neg_zero = try JSValue.newBigInt(testing.allocator, "-0");
+    defer neg_zero.deinit();
+    const pos = try JSValue.newBigInt(testing.allocator, "1");
+    defer pos.deinit();
+    const neg = try JSValue.newBigInt(testing.allocator, "-1");
+    defer neg.deinit();
+
+    try testing.expect(!zero.toBoolean());
+    try testing.expect(!neg_zero.toBoolean());
+    try testing.expect(pos.toBoolean());
+    try testing.expect(neg.toBoolean());
+}

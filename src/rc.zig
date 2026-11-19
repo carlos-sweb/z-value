@@ -28,6 +28,10 @@ pub fn Rc(comptime T: type) type {
     return struct {
         const Self = @This();
 
+        comptime {
+            std.debug.assert(@alignOf(Self) >= 8);
+        }
+
         /// Internal refcount -- not public API, see the invariants above.
         /// The leading underscore marks it as private (Zig has no private
         /// fields); read it through `refCount()`.
