@@ -16,36 +16,32 @@ const JSValue = @import("zvalue.zig").JSValue;
 /// independently-parsed/allocated instances, so it compares by VALUE, not
 /// by Rc box identity — see z-bigint's `ZBigInt.eql`.
 pub fn strictEquals(a: JSValue, b: JSValue) bool {
-    if (@as(std.meta.Tag(JSValue), a) != @as(std.meta.Tag(JSValue), b)) return false;
-    return switch (a) {
+    if (a.bits == b.bits) {
+        if (a.isNumber()) return !std.math.isNan(a.asNumber());
+        return true;
+    }
+    if (a.tag() != b.tag()) return false;
+    return switch (a.unpack()) {
         .undefined, .null => true,
-        .boolean => a.boolean == b.boolean,
-        .number => zarray.equality.strictEquals(f64, a.number, b.number),
-        .string => zarray.equality.strictEquals([]const u8, a.string.value.data, b.string.value.data),
-        .array => a.array == b.array,
-        .object => a.object == b.object,
-        .regex => a.regex == b.regex,
-        .symbol => a.symbol == b.symbol,
-        .map => a.map == b.map,
-        .set => a.set == b.set,
-        .@"error" => a.@"error" == b.@"error",
-        .function => a.function == b.function,
-        .date => a.date == b.date,
-        .promise => a.promise == b.promise,
-        .bigint => a.bigint.value.eql(b.bigint.value),
-        // Back to identity, like Date/Symbol -- the opposite of bigint's
-        // value-equality special case right above. Two Proxy objects are
-        // never `===` just because they happen to wrap the same target.
-        .proxy => a.proxy == b.proxy,
-        // Identity, like Date/Symbol/Proxy -- two ArrayBuffers/DataViews
-        // are never `===` just because they wrap the same bytes.
-        .array_buffer => a.array_buffer == b.array_buffer,
-        .data_view => a.data_view == b.data_view,
-        .typed_array => a.typed_array == b.typed_array,
-        // Identity, like Date -- two Temporal instances are never `===`
-        // just because they represent the same date/time/duration; JS
-        // code compares them with `.equals()`.
-        .temporal => a.temporal == b.temporal,
+        .boolean => a.asBool() == b.asBool(),
+        .number => zarray.equality.strictEquals(f64, a.asNumber(), b.asNumber()),
+        .string => zarray.equality.strictEquals([]const u8, a.asString().value.data, b.asString().value.data),
+        .array => a.asArray() == b.asArray(),
+        .object => a.asObject() == b.asObject(),
+        .regex => a.asRegex() == b.asRegex(),
+        .symbol => a.asSymbol() == b.asSymbol(),
+        .map => a.asMap() == b.asMap(),
+        .set => a.asSet() == b.asSet(),
+        .@"error" => a.asError() == b.asError(),
+        .function => a.asFunction() == b.asFunction(),
+        .date => a.asDate() == b.asDate(),
+        .promise => a.asPromise() == b.asPromise(),
+        .bigint => a.asBigInt().value.eql(b.asBigInt().value),
+        .proxy => a.asProxy() == b.asProxy(),
+        .array_buffer => a.asArrayBuffer() == b.asArrayBuffer(),
+        .data_view => a.asDataView() == b.asDataView(),
+        .typed_array => a.asTypedArray() == b.asTypedArray(),
+        .temporal => a.asTemporal() == b.asTemporal(),
     };
 }
 
@@ -58,12 +54,13 @@ pub fn strictEquals(a: JSValue, b: JSValue) bool {
 /// cheap JSValue copies. Do not "simplify" this to identity comparison for
 /// all heap variants — that would silently break string equality.
 pub fn sameValueZero(a: JSValue, b: JSValue) bool {
-    if (@as(std.meta.Tag(JSValue), a) != @as(std.meta.Tag(JSValue), b)) return false;
-    return switch (a) {
-        .number => zarray.equality.sameValueZero(f64, a.number, b.number),
-        .string => zarray.equality.sameValueZero([]const u8, a.string.value.data, b.string.value.data),
-        else => strictEquals(a, b),
-    };
+    if (a.bits == b.bits) {
+        return true;
+    }
+    if (a.tag() != b.tag()) return false;
+    if (a.isNumber()) return zarray.equality.sameValueZero(f64, a.asNumber(), b.asNumber());
+    if (a.isString()) return zarray.equality.sameValueZero([]const u8, a.asString().value.data, b.asString().value.data);
+    return strictEquals(a, b);
 }
 
 /// Content hash consistent with sameValueZero, for use as a Map/Set/HashMap
@@ -71,7 +68,8 @@ pub fn sameValueZero(a: JSValue, b: JSValue) bool {
 /// matching their identity-based equality. bigint hashes by VALUE (see
 /// strictEquals' doc comment above) so it stays consistent with `eql`.
 pub fn hash(v: JSValue) u64 {
-    return switch (v) {
+    if (v.isNumber()) return zarray.equality.hash(f64, v.asNumber());
+    return switch (v.unpack()) {
         .undefined => 0x1,
         .null => 0x2,
         .boolean => |b| if (b) @as(u64, 0x3) else @as(u64, 0x4),

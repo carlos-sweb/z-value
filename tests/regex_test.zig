@@ -16,9 +16,9 @@ test "regex: retain/deinit balance (Rc works with Regex.deinit's by-value receiv
     const v = try JSValue.fromRegex(testing.allocator, re);
     const v2 = v.retain();
 
-    try testing.expectEqual(@as(usize, 2), v.regex.refCount());
+    try testing.expectEqual(@as(usize, 2), v.asRegex().refCount());
     v.deinit();
-    try testing.expectEqual(@as(usize, 1), v2.regex.refCount());
+    try testing.expectEqual(@as(usize, 1), v2.asRegex().refCount());
     v2.deinit();
 }
 
@@ -26,7 +26,7 @@ test "regex: has no nested JSValues, so deinit doesn't need to recurse" {
     const re = try zregex.Regex.compile(testing.allocator, "c?");
     const v = try JSValue.fromRegex(testing.allocator, re);
     defer v.deinit();
-    try testing.expect(v.regex.value.pattern.len > 0);
+    try testing.expect(v.asRegex().value.pattern.len > 0);
 }
 
 test "fromRegex: OOM releases the handed-over Regex" {

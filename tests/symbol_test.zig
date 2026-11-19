@@ -11,11 +11,11 @@ test "newSymbol: single owner, deinit frees" {
 test "newSymbol: retain twice, deinit twice, no leak" {
     const s = try JSValue.newSymbol(testing.allocator, "id");
     const s2 = s.retain();
-    try testing.expect(s.symbol == s2.symbol);
-    try testing.expectEqual(@as(usize, 2), s.symbol.refCount());
+    try testing.expect(s.asSymbol() == s2.asSymbol());
+    try testing.expectEqual(@as(usize, 2), s.asSymbol().refCount());
 
     s.deinit();
-    try testing.expectEqual(@as(usize, 1), s2.symbol.refCount());
+    try testing.expectEqual(@as(usize, 1), s2.asSymbol().refCount());
     s2.deinit();
 }
 
@@ -25,7 +25,7 @@ test "every newSymbol() call is unique, even with the same description" {
     const b = try JSValue.newSymbol(testing.allocator, "dup");
     defer b.deinit();
 
-    try testing.expect(a.symbol != b.symbol);
+    try testing.expect(a.asSymbol() != b.asSymbol());
     try testing.expect(!@import("zvalue").equality.strictEquals(a, b));
 }
 
@@ -38,13 +38,13 @@ test "typeof a symbol is \"symbol\", not \"object\"" {
 test "description is accessible on the underlying ZSymbol" {
     const s = try JSValue.newSymbol(testing.allocator, "hello");
     defer s.deinit();
-    try testing.expectEqualStrings("hello", s.symbol.value.description.?);
+    try testing.expectEqualStrings("hello", s.asSymbol().value.description.?);
 }
 
 test "symbol with null description" {
     const s = try JSValue.newSymbol(testing.allocator, null);
     defer s.deinit();
-    try testing.expect(s.symbol.value.description == null);
+    try testing.expect(s.asSymbol().value.description == null);
 }
 
 test "newSymbol: OOM at any allocation leaks nothing" {

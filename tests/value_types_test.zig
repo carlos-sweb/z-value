@@ -14,10 +14,10 @@ test "typeof matches ECMAScript typeof operator" {
 
 test "fromBool / fromNumber round-trip" {
     const t = JSValue.fromBool(true);
-    try testing.expect(t.boolean == true);
+    try testing.expect(t.asBool() == true);
 
     const n = JSValue.fromNumber(3.14);
-    try testing.expect(n.number == 3.14);
+    try testing.expect(n.asNumber() == 3.14);
 }
 
 test "value types are trivially copyable (no deinit needed)" {
@@ -25,14 +25,14 @@ test "value types are trivially copyable (no deinit needed)" {
     const b = a; // plain copy
     a.deinit();
     b.deinit();
-    try testing.expect(b.number == 5.0);
+    try testing.expect(b.asNumber() == 5.0);
 }
 
 test "JSValue size is small (value types stay inline)" {
     // Tag (smallest int that fits all variants) + largest payload (f64/pointer,
     // both 8 bytes) plus alignment padding. This is a sanity bound, not an
     // exact-size assertion tied to a specific Zig ABI layout decision.
-    try testing.expect(@sizeOf(JSValue) <= 24);
+    try testing.expectEqual(@as(usize, 8), @sizeOf(JSValue));
 }
 
 test "switch over JSValue is exhaustive" {
@@ -43,7 +43,7 @@ test "switch over JSValue is exhaustive" {
         JSValue.fromNumber(0.0),
     };
     for (values) |v| {
-        const label: []const u8 = switch (v) {
+        const label: []const u8 = switch (v.unpack()) {
             .undefined => "undefined",
             .null => "null",
             .boolean => "boolean",
@@ -91,18 +91,18 @@ fn buildMixedChain(a: std.mem.Allocator, depth: usize) !JSValue {
             0 => blk: {
                 const v = try JSValue.newArray(a);
                 errdefer v.deinit();
-                _ = try v.array.value.push(cur);
+                _ = try v.asArray().value.push(cur);
                 cur = JSValue.NULL;
-                _ = try v.array.value.push(try JSValue.newString(a, "leaf"));
+                _ = try v.asArray().value.push(try JSValue.newString(a, "leaf"));
                 break :blk v;
             },
             1 => blk: {
                 const v = try JSValue.newObject(a);
                 errdefer v.deinit();
-                try v.object.value.set("next", cur);
+                try v.asObject().value.set("next", cur);
                 cur = JSValue.NULL;
                 const getter = try JSValue.newBigInt(a, "123456789012345678901234567890");
-                v.object.value.defineAccessor("acc", getter, null, JSValue.UNDEFINED) catch |e| {
+                v.asObject().value.defineAccessor("acc", getter, null, JSValue.UNDEFINED) catch |e| {
                     getter.deinit();
                     return e;
                 };
@@ -111,18 +111,18 @@ fn buildMixedChain(a: std.mem.Allocator, depth: usize) !JSValue {
             2 => blk: {
                 const v = try JSValue.newMap(a);
                 errdefer v.deinit();
-                try v.map.value.set(cur, try JSValue.newDate(a, 0));
+                try v.asMap().value.set(cur, try JSValue.newDate(a, 0));
                 cur = JSValue.NULL;
                 break :blk v;
             },
             3 => blk: {
                 const v = try JSValue.newSet(a);
                 errdefer v.deinit();
-                try v.set.value.add(cur);
+                try v.asSet().value.add(cur);
                 cur = JSValue.NULL;
                 const buf = try JSValue.newArrayBuffer(a, 8);
                 const view = try JSValue.newTypedArray(a, buf, 0, null, .u8);
-                v.set.value.add(view) catch |e| {
+                v.asSet().value.add(view) catch |e| {
                     view.deinit();
                     return e;
                 };
@@ -146,7 +146,7 @@ fn buildMixedChain(a: std.mem.Allocator, depth: usize) !JSValue {
                 errdefer v.deinit();
                 const buf = try JSValue.newArrayBuffer(a, 8);
                 const view = try JSValue.newDataView(a, buf, 0, null);
-                _ = v.promise.value.subscribe(a, .{ .on_fulfilled = view, .derived = cur }) catch |e| {
+                _ = v.asPromise().value.subscribe(a, .{ .on_fulfilled = view, .derived = cur }) catch |e| {
                     view.deinit();
                     return e;
                 };
@@ -174,7 +174,7 @@ test "deinit: a 100 000-deep promise-result chain does not overflow the stack" {
     var cur = JSValue.NULL;
     for (0..100_000) |_| {
         const p = try JSValue.newPromise(testing.allocator);
-        testing.allocator.free(try p.promise.value.settle(testing.allocator, .fulfilled, cur));
+        testing.allocator.free(try p.asPromise().value.settle(testing.allocator, .fulfilled, cur));
         cur = p;
     }
     cur.deinit();
@@ -197,13 +197,13 @@ test "deinit releases a shared child exactly once, whatever the release order" {
     const shared = try JSValue.newArray(testing.allocator);
     defer shared.deinit();
     const left = try JSValue.newArray(testing.allocator);
-    _ = try left.array.value.push(shared.retain());
+    _ = try left.asArray().value.push(shared.retain());
     const right = try JSValue.newMap(testing.allocator);
-    try right.map.value.set(shared.retain(), shared.retain());
+    try right.asMap().value.set(shared.retain(), shared.retain());
     const root = try JSValue.newArray(testing.allocator);
-    _ = try root.array.value.push(left);
-    _ = try root.array.value.push(right);
-    try testing.expectEqual(@as(usize, 4), shared.array.refCount());
+    _ = try root.asArray().value.push(left);
+    _ = try root.asArray().value.push(right);
+    try testing.expectEqual(@as(usize, 4), shared.asArray().refCount());
     root.deinit();
-    try testing.expectEqual(@as(usize, 1), shared.array.refCount());
+    try testing.expectEqual(@as(usize, 1), shared.asArray().refCount());
 }

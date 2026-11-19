@@ -30,7 +30,7 @@ pub fn main() !void {
         // A proxy whose target is itself: only reachable by mutating
         // `Proxy.target` directly (JS fixes a Proxy's target at creation).
         const p = try JSValue.newProxy(a, try JSValue.newObject(a), JSValue.UNDEFINED);
-        p.proxy.value.target = p;
+        p.asProxy().value.target = p;
         _ = p.typeOf();
     } else unreachable;
     // Reaching this line means the precondition did NOT abort: exit 0,

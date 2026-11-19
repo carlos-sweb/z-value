@@ -41,260 +41,528 @@ pub const BigIntError = zbigint.BigIntError;
 pub const ArrayBuffer = zbuffer.ArrayBuffer;
 pub const BufferError = zbuffer.BufferError;
 pub const TemporalValue = ztemporal_value.TemporalValue;
-/// Re-exported for embedders implementing Object.defineProperty over
-/// ZObject records.
 pub const PropertyDescriptor = zobject.PropertyDescriptor;
-/// Re-exported for the Rc-aware object mutators (`objectSet` and friends).
 pub const ZObjectError = zobject.ZObjectError;
 
-/// A JS value: undefined/null/boolean/number are inline (trivially copyable
-/// bits); string/array/object/regex are heap-owning and live behind a
-/// pointer to a reference-counted box (see Rc(T) in rc.zig), never embedded
-/// by value, because:
-///   - array/object/regex have *identity* semantics in JS (two distinct
-///     objects are never `===`, even with identical content).
-///   - it keeps @sizeOf(JSValue) small so copying a JSValue is O(1)
-///     regardless of how large the array/object behind it is.
-///
-/// OWNERSHIP RULE (Zig has no copy constructors, so this is convention, not
-/// compiler-enforced): copying a JSValue by assignment does NOT touch the
-/// refcount. Call `retain()` explicitly whenever a copy needs to outlive the
-/// original binding (e.g. storing a JSValue into a second container), and
-/// call `deinit()` exactly once per retained/owned reference when done.
-/// `ZArray(JSValue).clone()` / `ZObject(JSValue)`'s property-copy helpers are
-/// shallow (byte copies) and do NOT retain their elements — never call them
-/// directly on `T = JSValue`; use `cloneArray()`/`cloneObject()` below.
-pub const JSValue = union(enum) {
-    undefined: void,
-    null: void,
-    boolean: bool,
-    number: f64,
-    string: *Rc(ZString),
-    array: *Rc(ZArray(JSValue)),
-    object: *Rc(ZObject(JSValue)),
-    regex: *Rc(Regex),
-    symbol: *Rc(ZSymbol),
-    map: *Rc(ZMap(JSValue, JSValue)),
-    set: *Rc(ZSet(JSValue)),
-    @"error": *Rc(ZError(JSValue)),
-    function: *Rc(Callable),
-    date: *Rc(ZDate),
-    promise: *Rc(ZPromise(JSValue)),
-    bigint: *Rc(ZBigInt),
-    proxy: *Rc(Proxy),
-    array_buffer: *Rc(ArrayBuffer),
-    data_view: *Rc(DataViewBox),
-    typed_array: *Rc(TypedArrayBox),
-    temporal: *Rc(TemporalValue),
+pub const JSValue = extern struct {
+    bits: u64,
 
-    pub const UNDEFINED: JSValue = .{ .undefined = {} };
-    pub const NULL: JSValue = .{ .null = {} };
-
-    pub fn fromBool(value: bool) JSValue {
-        return .{ .boolean = value };
+    comptime {
+        std.debug.assert(@sizeOf(JSValue) == 8);
     }
 
-    pub fn fromNumber(value: f64) JSValue {
-        return .{ .number = value };
+    pub const CANONICAL_NAN: u64 = 0x7FF8_0000_0000_0000;
+    pub const PTR_MASK: u64 = 0x0000_7FFF_FFFF_FFFF;
+    pub const HEADER_MASK: u64 = 0xFFFF_8000_0000_0000;
+
+    pub const Tag = enum(u5) {
+        number = 0,
+        undefined = 1,
+        null = 2,
+        boolean = 3,
+        string = 4,
+        array = 5,
+        object = 6,
+        regex = 7,
+        symbol = 8,
+        map = 9,
+        set = 10,
+        @"error" = 11,
+        function = 12,
+        date = 13,
+        promise = 14,
+        bigint = 15,
+        proxy = 16,
+        array_buffer = 17,
+        data_view = 18,
+        typed_array = 19,
+        temporal = 20,
+    };
+
+    pub const Unpacked = union(enum) {
+        undefined: void,
+        null: void,
+        boolean: bool,
+        number: f64,
+        string: *Rc(ZString),
+        array: *Rc(ZArray(JSValue)),
+        object: *Rc(ZObject(JSValue)),
+        regex: *Rc(Regex),
+        symbol: *Rc(ZSymbol),
+        map: *Rc(ZMap(JSValue, JSValue)),
+        set: *Rc(ZSet(JSValue)),
+        @"error": *Rc(ZError(JSValue)),
+        function: *Rc(Callable),
+        date: *Rc(ZDate),
+        promise: *Rc(ZPromise(JSValue)),
+        bigint: *Rc(ZBigInt),
+        proxy: *Rc(Proxy),
+        array_buffer: *Rc(ArrayBuffer),
+        data_view: *Rc(DataViewBox),
+        typed_array: *Rc(TypedArrayBox),
+        temporal: *Rc(TemporalValue),
+    };
+
+    pub inline fn makeHeader(t: Tag) u64 {
+        const raw: u5 = @intFromEnum(t);
+        const sign: u64 = @as(u64, (raw >> 4) & 1) << 63;
+        const tag_field: u64 = @as(u64, raw & 0xF) << 47;
+        return sign | 0x7FF8_0000_0000_0000 | tag_field;
+    }
+
+    pub inline fn fromHeap(comptime t: Tag, ptr: anytype) JSValue {
+        const raw = @intFromPtr(ptr);
+        std.debug.assert(raw <= PTR_MASK);
+        return .{ .bits = makeHeader(t) | raw };
+    }
+
+    pub const TAG_UNDEFINED: u64 = makeHeader(.undefined);
+    pub const TAG_NULL: u64 = makeHeader(.null);
+    pub const TAG_BOOLEAN_BASE: u64 = makeHeader(.boolean);
+    pub const TAG_FALSE: u64 = TAG_BOOLEAN_BASE;
+    pub const TAG_TRUE: u64 = TAG_BOOLEAN_BASE | 1;
+
+    pub const UNDEFINED: JSValue = .{ .bits = TAG_UNDEFINED };
+    pub const NULL: JSValue = .{ .bits = TAG_NULL };
+    pub const TRUE: JSValue = .{ .bits = TAG_TRUE };
+    pub const FALSE: JSValue = .{ .bits = TAG_FALSE };
+
+    pub const undefined_val: JSValue = UNDEFINED;
+    pub const null_val: JSValue = NULL;
+
+    pub inline fn fromBool(value: bool) JSValue {
+        return if (value) TRUE else FALSE;
+    }
+
+    pub inline fn fromNumber(value: f64) JSValue {
+        if (std.math.isNan(value)) return .{ .bits = CANONICAL_NAN };
+        return .{ .bits = @bitCast(value) };
+    }
+
+    pub inline fn fromString(box: *Rc(ZString)) JSValue {
+        return fromHeap(.string, box);
+    }
+
+    pub inline fn fromArray(box: *Rc(ZArray(JSValue))) JSValue {
+        return fromHeap(.array, box);
+    }
+
+    pub inline fn fromObject(box: *Rc(ZObject(JSValue))) JSValue {
+        return fromHeap(.object, box);
+    }
+
+    pub inline fn fromRegexBox(box: *Rc(Regex)) JSValue {
+        return fromHeap(.regex, box);
+    }
+
+    pub inline fn fromSymbol(box: *Rc(ZSymbol)) JSValue {
+        return fromHeap(.symbol, box);
+    }
+
+    pub inline fn fromMap(box: *Rc(ZMap(JSValue, JSValue))) JSValue {
+        return fromHeap(.map, box);
+    }
+
+    pub inline fn fromSet(box: *Rc(ZSet(JSValue))) JSValue {
+        return fromHeap(.set, box);
+    }
+
+    pub inline fn fromError(box: *Rc(ZError(JSValue))) JSValue {
+        return fromHeap(.@"error", box);
+    }
+
+    pub inline fn fromFunction(box: *Rc(Callable)) JSValue {
+        return fromHeap(.function, box);
+    }
+
+    pub inline fn fromDate(box: *Rc(ZDate)) JSValue {
+        return fromHeap(.date, box);
+    }
+
+    pub inline fn fromPromise(box: *Rc(ZPromise(JSValue))) JSValue {
+        return fromHeap(.promise, box);
+    }
+
+    pub inline fn fromBigInt(box: *Rc(ZBigInt)) JSValue {
+        return fromHeap(.bigint, box);
+    }
+
+    pub inline fn fromProxy(box: *Rc(Proxy)) JSValue {
+        return fromHeap(.proxy, box);
+    }
+
+    pub inline fn fromArrayBuffer(box: *Rc(ArrayBuffer)) JSValue {
+        return fromHeap(.array_buffer, box);
+    }
+
+    pub inline fn fromDataView(box: *Rc(DataViewBox)) JSValue {
+        return fromHeap(.data_view, box);
+    }
+
+    pub inline fn fromTypedArray(box: *Rc(TypedArrayBox)) JSValue {
+        return fromHeap(.typed_array, box);
+    }
+
+    pub inline fn fromTemporal(box: *Rc(TemporalValue)) JSValue {
+        return fromHeap(.temporal, box);
+    }
+
+    pub inline fn pack(u: Unpacked) JSValue {
+        return switch (u) {
+            .undefined => UNDEFINED,
+            .null => NULL,
+            .boolean => |b| fromBool(b),
+            .number => |n| fromNumber(n),
+            .string => |ptr| fromString(ptr),
+            .array => |ptr| fromArray(ptr),
+            .object => |ptr| fromObject(ptr),
+            .regex => |ptr| fromRegexBox(ptr),
+            .symbol => |ptr| fromSymbol(ptr),
+            .map => |ptr| fromMap(ptr),
+            .set => |ptr| fromSet(ptr),
+            .@"error" => |ptr| fromError(ptr),
+            .function => |ptr| fromFunction(ptr),
+            .date => |ptr| fromDate(ptr),
+            .promise => |ptr| fromPromise(ptr),
+            .bigint => |ptr| fromBigInt(ptr),
+            .proxy => |ptr| fromProxy(ptr),
+            .array_buffer => |ptr| fromArrayBuffer(ptr),
+            .data_view => |ptr| fromDataView(ptr),
+            .typed_array => |ptr| fromTypedArray(ptr),
+            .temporal => |ptr| fromTemporal(ptr),
+        };
+    }
+
+    pub inline fn isNumber(self: JSValue) bool {
+        return self.bits == CANONICAL_NAN or (self.bits & 0x7FF8_0000_0000_0000) != 0x7FF8_0000_0000_0000;
+    }
+
+    pub inline fn asNumber(self: JSValue) f64 {
+        return @bitCast(self.bits);
+    }
+
+    pub inline fn tag(self: JSValue) Tag {
+        if (self.isNumber()) return .number;
+        const sign: u5 = @intCast((self.bits >> 63) & 1);
+        const field: u5 = @intCast((self.bits >> 47) & 0xF);
+        const raw: u5 = (sign << 4) | field;
+        return @enumFromInt(raw);
+    }
+
+    pub inline fn isUndefined(self: JSValue) bool {
+        return self.bits == TAG_UNDEFINED;
+    }
+
+    pub inline fn isNull(self: JSValue) bool {
+        return self.bits == TAG_NULL;
+    }
+
+    pub inline fn isBool(self: JSValue) bool {
+        return (self.bits & ~@as(u64, 1)) == TAG_BOOLEAN_BASE;
+    }
+
+    pub inline fn asBool(self: JSValue) bool {
+        return (self.bits & 1) != 0;
+    }
+
+    pub inline fn isString(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.string);
+    }
+
+    pub inline fn asString(self: JSValue) *Rc(ZString) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isArray(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.array);
+    }
+
+    pub inline fn asArray(self: JSValue) *Rc(ZArray(JSValue)) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isObject(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.object);
+    }
+
+    pub inline fn asObject(self: JSValue) *Rc(ZObject(JSValue)) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isRegex(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.regex);
+    }
+
+    pub inline fn asRegex(self: JSValue) *Rc(Regex) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isSymbol(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.symbol);
+    }
+
+    pub inline fn asSymbol(self: JSValue) *Rc(ZSymbol) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isMap(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.map);
+    }
+
+    pub inline fn asMap(self: JSValue) *Rc(ZMap(JSValue, JSValue)) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isSet(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.set);
+    }
+
+    pub inline fn asSet(self: JSValue) *Rc(ZSet(JSValue)) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isError(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.@"error");
+    }
+
+    pub inline fn asError(self: JSValue) *Rc(ZError(JSValue)) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isFunction(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.function);
+    }
+
+    pub inline fn asFunction(self: JSValue) *Rc(Callable) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isDate(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.date);
+    }
+
+    pub inline fn asDate(self: JSValue) *Rc(ZDate) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isPromise(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.promise);
+    }
+
+    pub inline fn asPromise(self: JSValue) *Rc(ZPromise(JSValue)) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isBigInt(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.bigint);
+    }
+
+    pub inline fn asBigInt(self: JSValue) *Rc(ZBigInt) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isProxy(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.proxy);
+    }
+
+    pub inline fn asProxy(self: JSValue) *Rc(Proxy) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isArrayBuffer(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.array_buffer);
+    }
+
+    pub inline fn asArrayBuffer(self: JSValue) *Rc(ArrayBuffer) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isDataView(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.data_view);
+    }
+
+    pub inline fn asDataView(self: JSValue) *Rc(DataViewBox) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isTypedArray(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.typed_array);
+    }
+
+    pub inline fn asTypedArray(self: JSValue) *Rc(TypedArrayBox) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn isTemporal(self: JSValue) bool {
+        return (self.bits & HEADER_MASK) == makeHeader(.temporal);
+    }
+
+    pub inline fn asTemporal(self: JSValue) *Rc(TemporalValue) {
+        return @ptrFromInt(self.bits & PTR_MASK);
+    }
+
+    pub inline fn needsDeinit(self: JSValue) bool {
+        if (self.isNumber()) return false;
+        return @intFromEnum(self.tag()) >= 4;
+    }
+
+    pub inline fn toBoolean(self: JSValue) bool {
+        if (self.bits == TAG_TRUE) return true;
+        if (self.bits == TAG_FALSE or self.bits == TAG_UNDEFINED or self.bits == TAG_NULL) return false;
+        if (self.isNumber()) {
+            const n = self.asNumber();
+            return n != 0 and !std.math.isNan(n);
+        }
+        if (self.isString()) {
+            return self.asString().value.data.len > 0;
+        }
+        return true;
+    }
+
+    pub inline fn isTruthy(self: JSValue) bool {
+        return self.toBoolean();
+    }
+
+    pub inline fn unpack(self: JSValue) Unpacked {
+        if (self.isNumber()) return .{ .number = self.asNumber() };
+        return switch (self.tag()) {
+            .number => .{ .number = self.asNumber() },
+            .undefined => .{ .undefined = {} },
+            .null => .{ .null = {} },
+            .boolean => .{ .boolean = self.asBool() },
+            .string => .{ .string = self.asString() },
+            .array => .{ .array = self.asArray() },
+            .object => .{ .object = self.asObject() },
+            .regex => .{ .regex = self.asRegex() },
+            .symbol => .{ .symbol = self.asSymbol() },
+            .map => .{ .map = self.asMap() },
+            .set => .{ .set = self.asSet() },
+            .@"error" => .{ .@"error" = self.asError() },
+            .function => .{ .function = self.asFunction() },
+            .date => .{ .date = self.asDate() },
+            .promise => .{ .promise = self.asPromise() },
+            .bigint => .{ .bigint = self.asBigInt() },
+            .proxy => .{ .proxy = self.asProxy() },
+            .array_buffer => .{ .array_buffer = self.asArrayBuffer() },
+            .data_view => .{ .data_view = self.asDataView() },
+            .typed_array => .{ .typed_array = self.asTypedArray() },
+            .temporal => .{ .temporal = self.asTemporal() },
+        };
     }
 
     pub fn newString(allocator: Allocator, content: []const u8) ZValueError!JSValue {
-        // Always owned (initOwned, never the borrowed-mode init()) — a
-        // borrowed ZString's deinit() is a no-op, which would silently break
-        // the Rc(T) refcounting contract (the box would "free" without
-        // actually freeing anything).
         var str = try ZString.initOwned(allocator, content);
         errdefer str.deinit();
-        return .{ .string = try Rc(ZString).create(allocator, str) };
+        return fromString(try Rc(ZString).create(allocator, str));
     }
 
     pub fn newArray(allocator: Allocator) ZValueError!JSValue {
         const arr = ZArray(JSValue).init(allocator);
-        return .{ .array = try Rc(ZArray(JSValue)).create(allocator, arr) };
+        return fromArray(try Rc(ZArray(JSValue)).create(allocator, arr));
     }
 
     pub fn newObject(allocator: Allocator) ZValueError!JSValue {
         const obj = ZObject(JSValue).init(allocator);
-        return .{ .object = try Rc(ZObject(JSValue)).create(allocator, obj) };
+        return fromObject(try Rc(ZObject(JSValue)).create(allocator, obj));
     }
 
-    /// Takes ownership of an already-compiled Regex (e.g. from
-    /// `zregex.Regex.compile()`) -- including on failure: if the box
-    /// can't be allocated, `re` is released here, never by the caller.
     pub fn fromRegex(allocator: Allocator, re: Regex) ZValueError!JSValue {
         errdefer re.deinit();
-        return .{ .regex = try Rc(Regex).create(allocator, re) };
+        return fromRegexBox(try Rc(Regex).create(allocator, re));
     }
 
-    /// Every call produces a brand-new, always-unique symbol — even with an
-    /// identical description, it never equals a previously created one (see
-    /// equality.zig: symbols compare by Rc box identity). Uses
-    /// ZSymbol.init() (a value, not create()'s own heap allocation) since
-    /// the Rc box itself is the symbol's one true heap allocation.
     pub fn newSymbol(allocator: Allocator, description: ?[]const u8) ZValueError!JSValue {
         var sym = try ZSymbol.init(allocator, description);
         errdefer sym.deinit();
-        return .{ .symbol = try Rc(ZSymbol).create(allocator, sym) };
+        return fromSymbol(try Rc(ZSymbol).create(allocator, sym));
     }
 
     pub fn newMap(allocator: Allocator) ZValueError!JSValue {
         const m = ZMap(JSValue, JSValue).init(allocator);
-        return .{ .map = try Rc(ZMap(JSValue, JSValue)).create(allocator, m) };
+        return fromMap(try Rc(ZMap(JSValue, JSValue)).create(allocator, m));
     }
 
     pub fn newSet(allocator: Allocator) ZValueError!JSValue {
         const s = ZSet(JSValue).init(allocator);
-        return .{ .set = try Rc(ZSet(JSValue)).create(allocator, s) };
+        return fromSet(try Rc(ZSet(JSValue)).create(allocator, s));
     }
 
-    /// Errors are objects in JS (typeOf() below reports "object", not
-    /// "error") but get their own JSValue variant for cheap identity
-    /// comparison and type-safe dispatch (e.g. an interpreter's catch-clause
-    /// matching), same rationale as symbol/map/set each getting their own
-    /// variant instead of being represented as plain `.object` values.
     pub fn newError(allocator: Allocator, kind: ErrorKind, message: []const u8) ZValueError!JSValue {
         var err = try ZError(JSValue).init(allocator, kind, message);
         errdefer err.deinit();
-        return .{ .@"error" = try Rc(ZError(JSValue)).create(allocator, err) };
+        return fromError(try Rc(ZError(JSValue)).create(allocator, err));
     }
 
-    /// AggregateError. Like arr.push()/map.set(), this does NOT retain
-    /// `errs` for you — ZError(JSValue).initAggregate() only byte-copies the
-    /// slice (same shallow-copy shape as ZArray.clone(), see the
-    /// OWNERSHIP RULE at the top of this file). If you still need your own
-    /// copy of a value after this call, retain() it yourself first:
-    /// `newAggregateError(alloc, "msg", &.{ a.retain(), b.retain() })`.
-    /// Ownership of `errs`' elements is taken even on failure (same as
-    /// `newDataView`'s `owner`): they are released here if this errors.
     pub fn newAggregateError(allocator: Allocator, message: []const u8, errs: []const JSValue) ZValueError!JSValue {
         errdefer for (errs) |e| e.deinit();
         var err = try ZError(JSValue).initAggregate(allocator, message, errs);
         errdefer err.deinit();
-        return .{ .@"error" = try Rc(ZError(JSValue)).create(allocator, err) };
+        return fromError(try Rc(ZError(JSValue)).create(allocator, err));
     }
 
-    /// Wraps a native or user-defined `Callable` (see callable.zig) as a
-    /// JSValue -- functions are first-class values in JS: they can be
-    /// stored in variables/properties/arrays and compared by identity.
-    /// Takes ownership of `callable` (its `prototype`/`statics`, if set)
-    /// even on failure -- released here if the box can't be allocated.
     pub fn newFunction(allocator: Allocator, callable: Callable) ZValueError!JSValue {
         var owned = callable;
         errdefer owned.deinit();
-        return .{ .function = try Rc(Callable).create(allocator, owned) };
+        return fromFunction(try Rc(Callable).create(allocator, owned));
     }
 
-    /// A Date from milliseconds since the Unix epoch. Out-of-range values
-    /// become z-date's INVALID_TIME (the "Invalid Date" state), matching
-    /// the real Date constructor.
     pub fn newDate(allocator: Allocator, ms: i64) ZValueError!JSValue {
-        return .{ .date = try Rc(ZDate).create(allocator, ZDate.fromTimestamp(ms)) };
+        return fromDate(try Rc(ZDate).create(allocator, ZDate.fromTimestamp(ms)));
     }
 
-    /// Wraps any of the 8 z-temporal instance types (see `TemporalValue`'s
-    /// doc comment for why they share one variant instead of getting one
-    /// each).
     pub fn newTemporal(allocator: Allocator, value: TemporalValue) ZValueError!JSValue {
-        return .{ .temporal = try Rc(TemporalValue).create(allocator, value) };
+        return fromTemporal(try Rc(TemporalValue).create(allocator, value));
     }
 
-    /// A fresh pending Promise. State transitions and reaction scheduling
-    /// are the embedder's job (see z-promise's own doc: it stores, the
-    /// interpreter schedules and calls).
     pub fn newPromise(allocator: Allocator) ZValueError!JSValue {
-        return .{ .promise = try Rc(ZPromise(JSValue)).create(allocator, ZPromise(JSValue).init()) };
+        return fromPromise(try Rc(ZPromise(JSValue)).create(allocator, ZPromise(JSValue).init()));
     }
 
-    /// Parses the exact raw digit text a BigInt literal/coercion hands in
-    /// (see z-bigint's `ZBigInt.fromDigitText` for the accepted grammar:
-    /// optional `0x`/`0o`/`0b` prefix, `_` separators, optional sign).
     pub fn newBigInt(allocator: Allocator, raw_digit_text: []const u8) BigIntError!JSValue {
         var v = try ZBigInt.fromDigitText(allocator, raw_digit_text);
         errdefer v.deinit();
-        return .{ .bigint = try Rc(ZBigInt).create(allocator, v) };
+        return fromBigInt(try Rc(ZBigInt).create(allocator, v));
     }
 
-    /// Boxes an already-computed `ZBigInt` (e.g. the result of
-    /// `ZBigInt.add`/`.mul`/etc.) -- unlike `newBigInt`, does not parse
-    /// digit text. Takes ownership of `v` (matching `newDate`/`newSymbol`'s
-    /// "box whatever you're handed" convention for freshly-constructed
-    /// values with no other owner yet) -- including on failure: `v` is
-    /// released here if the box can't be allocated.
     pub fn newBigIntFromValue(allocator: Allocator, v: ZBigInt) ZValueError!JSValue {
         var owned = v;
         errdefer owned.deinit();
-        return .{ .bigint = try Rc(ZBigInt).create(allocator, owned) };
+        return fromBigInt(try Rc(ZBigInt).create(allocator, owned));
     }
 
-    /// Does NOT retain `target`/`handler` for you (see proxy.zig's doc
-    /// comment) -- same convention as `newAggregateError`'s `errs`. Like
-    /// `newDataView`, ownership is taken even on failure: both are
-    /// released here if the box can't be allocated.
     pub fn newProxy(allocator: Allocator, target: JSValue, handler: JSValue) ZValueError!JSValue {
         errdefer {
             target.deinit();
             handler.deinit();
         }
-        return .{ .proxy = try Rc(Proxy).create(allocator, .{ .target = target, .handler = handler }) };
+        return fromProxy(try Rc(Proxy).create(allocator, .{ .target = target, .handler = handler }));
     }
 
-    /// Allocates a new zero-initialized `ArrayBuffer` of `byte_length`
-    /// bytes.
     pub fn newArrayBuffer(allocator: Allocator, byte_length: usize) ZValueError!JSValue {
         var buf = try ArrayBuffer.init(allocator, byte_length);
         errdefer buf.deinit();
-        return .{ .array_buffer = try Rc(ArrayBuffer).create(allocator, buf) };
+        return fromArrayBuffer(try Rc(ArrayBuffer).create(allocator, buf));
     }
 
-    /// Same storage as `newArrayBuffer` -- this engine has no real
-    /// cross-agent memory model, so `SharedArrayBuffer` is `ArrayBuffer`
-    /// plus `is_shared` for prototype dispatch (see
-    /// atomics-sharedarraybuffer.md). Still one JSValue tag,
-    /// `.array_buffer`.
     pub fn newSharedArrayBuffer(allocator: Allocator, byte_length: usize) ZValueError!JSValue {
         var buf = try ArrayBuffer.init(allocator, byte_length);
         errdefer buf.deinit();
         buf.is_shared = true;
-        return .{ .array_buffer = try Rc(ArrayBuffer).create(allocator, buf) };
+        return fromArrayBuffer(try Rc(ArrayBuffer).create(allocator, buf));
     }
 
-    /// Precondition: `owner` must be `.array_buffer`. If it is not, the
-    /// process aborts with a clear message, in every build mode -- this is
-    /// a caller bug, not JS-facing input (z-interpreter validates the
-    /// argument and throws a real JS TypeError before calling), so it is
-    /// not part of the error set.
-    ///
-    /// Does NOT retain `owner` for you (same convention as `newProxy`'s
-    /// `target`/`handler`) -- the caller must `.retain()` it first if it
-    /// still needs its own reference afterward.
     pub fn newDataView(allocator: Allocator, owner: JSValue, byte_offset: usize, byte_length: ?usize) BufferError!JSValue {
         owner.requireTag(.array_buffer, "newDataView: owner must be .array_buffer");
-        // `owner` is already a retained reference handed off by the
-        // caller -- on any error below, nothing else will ever release
-        // it, so this function must.
         errdefer owner.deinit();
-        const box = owner.array_buffer;
+        const box = owner.asArrayBuffer();
         const view = try zbuffer.DataView.init(&box.value, byte_offset, byte_length);
-        return .{ .data_view = try Rc(DataViewBox).create(allocator, .{ .view = view, .owner = owner }) };
+        return fromDataView(try Rc(DataViewBox).create(allocator, .{ .view = view, .owner = owner }));
     }
 
-    /// Same "caller retains, this takes ownership" convention as
-    /// `newDataView`, and the same validate-via-delegation shape:
-    /// dispatches to the right `zbuffer.TypedArrayView(T).init` for its
-    /// `Misaligned`/`OutOfBounds` bounds checking AND to resolve `len`
-    /// when omitted (`null` -> every whole element from `byte_offset` to
-    /// the end of the buffer, matching `new Int32Array(buffer,
-    /// byteOffset)` with no length argument) -- the returned view's
-    /// `.len` is what actually gets stored; `TypedArrayBox` keeps the
-    /// raw offset/len/kind and reconstructs a view on demand per access,
-    /// since `kind` is a runtime tag and `T` isn't known until then.
-    ///
-    /// Precondition: `owner` must be `.array_buffer`. If it is not, the
-    /// process aborts with a clear message (same as `newDataView`).
     pub fn newTypedArray(allocator: Allocator, owner: JSValue, byte_offset: usize, len: ?usize, kind: TypedKind) BufferError!JSValue {
         owner.requireTag(.array_buffer, "newTypedArray: owner must be .array_buffer");
         errdefer owner.deinit();
-        const box = owner.array_buffer;
+        const box = owner.asArrayBuffer();
         const resolved_len: usize = switch (kind) {
             .i8 => (try zbuffer.TypedArrayView(i8).init(&box.value, byte_offset, len)).len,
             .u8, .u8_clamped => (try zbuffer.TypedArrayView(u8).init(&box.value, byte_offset, len)).len,
@@ -307,47 +575,28 @@ pub const JSValue = union(enum) {
             .i64 => (try zbuffer.TypedArrayView(i64).init(&box.value, byte_offset, len)).len,
             .u64 => (try zbuffer.TypedArrayView(u64).init(&box.value, byte_offset, len)).len,
         };
-        return .{ .typed_array = try Rc(TypedArrayBox).create(allocator, .{ .owner = owner, .byte_offset = byte_offset, .len = resolved_len, .kind = kind }) };
+        return fromTypedArray(try Rc(TypedArrayBox).create(allocator, .{ .owner = owner, .byte_offset = byte_offset, .len = resolved_len, .kind = kind }));
     }
 
-    /// Aborts the process with `<context>, got .<actual tag>` unless `self`
-    /// holds `expected`. Used for caller-bug preconditions (never for
-    /// JS-facing input): `std.debug.panic` stays active in every build mode,
-    /// so a wrong variant is a deterministic abort instead of reading
-    /// another variant's payload (undefined behavior in ReleaseFast).
-    fn requireTag(self: JSValue, comptime expected: std.meta.Tag(JSValue), comptime context: []const u8) void {
-        if (self != expected) std.debug.panic(context ++ ", got .{s}", .{@tagName(self)});
+    pub fn requireTag(self: JSValue, comptime expected: Tag, comptime context: []const u8) void {
+        if (self.tag() != expected) std.debug.panic(context ++ ", got .{s}", .{@tagName(self.tag())});
     }
 
-    /// ECMAScript `typeof` operator. Note the famous spec quirk:
-    /// typeof null === "object", not "null". Arrays/objects/regexes/maps/sets
-    /// are all typeof "object" too — only functions get their own "function"
-    /// result, everything else heap-boxed is "object".
     pub fn typeOf(self: JSValue) []const u8 {
-        // A proxy reports its TARGET's type, not a fixed "object" -- a proxy
-        // wrapping a callable is itself typeof "function". The target chain
-        // is walked with a loop (not recursion), so a 1 000 000-deep
-        // proxy-of-proxy chain costs no native stack.
-        //
-        // `slow` trails `cur` at half speed (Floyd's cycle check, no memory
-        // needed): a chain that loops back on itself can't come from JS (a
-        // Proxy's target is fixed at creation), only from code mutating
-        // `Proxy.target` directly, and it has no final target to report --
-        // abort with a clear message instead of spinning forever.
         var cur = self;
         var slow = self;
         var advance_slow = false;
-        while (cur == .proxy) {
-            cur = cur.proxy.value.target;
+        while (cur.isProxy()) {
+            cur = cur.asProxy().value.target;
             if (advance_slow) {
-                slow = slow.proxy.value.target;
-                if (cur == .proxy and cur.proxy == slow.proxy) {
+                slow = slow.asProxy().value.target;
+                if (cur.isProxy() and cur.asProxy() == slow.asProxy()) {
                     std.debug.panic("typeOf: proxy target chain is cyclic", .{});
                 }
             }
             advance_slow = !advance_slow;
         }
-        return switch (cur) {
+        return switch (cur.tag()) {
             .undefined => "undefined",
             .null => "object",
             .boolean => "boolean",
@@ -356,121 +605,75 @@ pub const JSValue = union(enum) {
             .symbol => "symbol",
             .function => "function",
             .bigint => "bigint",
-            .proxy => unreachable, // the loop above only exits on a non-proxy
+            .proxy => unreachable,
             .array, .object, .regex, .map, .set, .@"error", .date, .promise, .array_buffer, .data_view, .typed_array, .temporal => "object",
         };
     }
 
-    /// Duck-typed hook picked up by zequality's generic strictEquals/hash
-    /// machinery (see z-equality's `hasCustomEql`/`containerEquals`) so that
-    /// `ZMap(JSValue, JSValue)`/`ZSet(JSValue)` — which delegate their key
-    /// comparison to `zequality.sameValueZero(K, ...)` — work at all. Uses
-    /// SameValueZero specifically (not strictEquals) because that's the
-    /// ECMA-262 Map/Set key-comparison algorithm, and it's the only consumer
-    /// of this method today.
     pub fn eql(a: JSValue, b: JSValue) bool {
         return @import("equality.zig").sameValueZero(a, b);
     }
 
-    /// Pairs with eql() above for the same duck-typing contract (equal
-    /// values must hash equally — required together or zequality raises a
-    /// compile error).
     pub fn hash(self: JSValue) u64 {
         return @import("equality.zig").hash(self);
     }
 
-    /// Increments the refcount of the underlying box, if any (no-op for
-    /// inline value types). Returns self so call sites can chain, e.g.
-    /// `arr.push(child.retain())`.
-    pub fn retain(self: JSValue) JSValue {
-        switch (self) {
-            .undefined, .null, .boolean, .number => {},
-            .string => |box| _ = box.retain(),
-            .array => |box| _ = box.retain(),
-            .object => |box| _ = box.retain(),
-            .regex => |box| _ = box.retain(),
-            .symbol => |box| _ = box.retain(),
-            .map => |box| _ = box.retain(),
-            .set => |box| _ = box.retain(),
-            .@"error" => |box| _ = box.retain(),
-            .function => |box| _ = box.retain(),
-            .date => |box| _ = box.retain(),
-            .promise => |box| _ = box.retain(),
-            .bigint => |box| _ = box.retain(),
-            .proxy => |box| _ = box.retain(),
-            .array_buffer => |box| _ = box.retain(),
-            .data_view => |box| _ = box.retain(),
-            .typed_array => |box| _ = box.retain(),
-            .temporal => |box| _ = box.retain(),
+    pub inline fn retain(self: JSValue) JSValue {
+        if (self.needsDeinit()) {
+            switch (self.tag()) {
+                .string => _ = self.asString().retain(),
+                .array => _ = self.asArray().retain(),
+                .object => _ = self.asObject().retain(),
+                .regex => _ = self.asRegex().retain(),
+                .symbol => _ = self.asSymbol().retain(),
+                .map => _ = self.asMap().retain(),
+                .set => _ = self.asSet().retain(),
+                .@"error" => _ = self.asError().retain(),
+                .function => _ = self.asFunction().retain(),
+                .date => _ = self.asDate().retain(),
+                .promise => _ = self.asPromise().retain(),
+                .bigint => _ = self.asBigInt().retain(),
+                .proxy => _ = self.asProxy().retain(),
+                .array_buffer => _ = self.asArrayBuffer().retain(),
+                .data_view => _ = self.asDataView().retain(),
+                .typed_array => _ = self.asTypedArray().retain(),
+                .temporal => _ = self.asTemporal().retain(),
+                else => {},
+            }
         }
         return self;
     }
 
-    /// Sets the GC hook (see `Rc(T).setGcHook`) on whichever box backs this
-    /// value; a no-op for the four inline variants. An embedder uses this
-    /// right after creating a value to keep an external registry in sync
-    /// with `Rc.destroy()`, wherever that ends up being triggered from.
     pub fn setGcHook(self: JSValue, ctx: *anyopaque, hook: *const fn (ctx: *anyopaque, box: *anyopaque) void) void {
-        switch (self) {
-            .undefined, .null, .boolean, .number => {},
-            .string => |box| _ = box.setGcHook(ctx, hook),
-            .array => |box| _ = box.setGcHook(ctx, hook),
-            .object => |box| _ = box.setGcHook(ctx, hook),
-            .regex => |box| _ = box.setGcHook(ctx, hook),
-            .symbol => |box| _ = box.setGcHook(ctx, hook),
-            .map => |box| _ = box.setGcHook(ctx, hook),
-            .set => |box| _ = box.setGcHook(ctx, hook),
-            .@"error" => |box| _ = box.setGcHook(ctx, hook),
-            .function => |box| _ = box.setGcHook(ctx, hook),
-            .date => |box| _ = box.setGcHook(ctx, hook),
-            .promise => |box| _ = box.setGcHook(ctx, hook),
-            .bigint => |box| _ = box.setGcHook(ctx, hook),
-            .proxy => |box| _ = box.setGcHook(ctx, hook),
-            .array_buffer => |box| _ = box.setGcHook(ctx, hook),
-            .data_view => |box| _ = box.setGcHook(ctx, hook),
-            .typed_array => |box| _ = box.setGcHook(ctx, hook),
-            .temporal => |box| _ = box.setGcHook(ctx, hook),
+        if (!self.needsDeinit()) return;
+        switch (self.tag()) {
+            .number, .undefined, .null, .boolean => {},
+            .string => _ = self.asString().setGcHook(ctx, hook),
+            .array => _ = self.asArray().setGcHook(ctx, hook),
+            .object => _ = self.asObject().setGcHook(ctx, hook),
+            .regex => _ = self.asRegex().setGcHook(ctx, hook),
+            .symbol => _ = self.asSymbol().setGcHook(ctx, hook),
+            .map => _ = self.asMap().setGcHook(ctx, hook),
+            .set => _ = self.asSet().setGcHook(ctx, hook),
+            .@"error" => _ = self.asError().setGcHook(ctx, hook),
+            .function => _ = self.asFunction().setGcHook(ctx, hook),
+            .date => _ = self.asDate().setGcHook(ctx, hook),
+            .promise => _ = self.asPromise().setGcHook(ctx, hook),
+            .bigint => _ = self.asBigInt().setGcHook(ctx, hook),
+            .proxy => _ = self.asProxy().setGcHook(ctx, hook),
+            .array_buffer => _ = self.asArrayBuffer().setGcHook(ctx, hook),
+            .data_view => _ = self.asDataView().setGcHook(ctx, hook),
+            .typed_array => _ = self.asTypedArray().setGcHook(ctx, hook),
+            .temporal => _ = self.asTemporal().setGcHook(ctx, hook),
         }
     }
 
-    /// Releases this reference. When the underlying box's refcount reaches
-    /// zero, tears down the wrapped value (releasing any nested JSValues
-    /// first) and frees the box.
-    ///
-    /// Iterative, not recursive: nesting depth costs no native stack, so a
-    /// 100 000-deep `a = [a]` chain is released as safely as a flat one.
-    /// It also never allocates (see `PendingRelease`), so releasing memory
-    /// can never fail for lack of memory.
-    ///
-    /// KNOWN GAP: ZObject(JSValue).prototype is a raw `?*Self` inherited from
-    /// z-object with no lifetime management of its own — it is not retained
-    /// or released here. If a prototype object is freed while another object
-    /// still points to it as a prototype, that pointer dangles. z-object
-    /// would need to become Rc-aware for this to be handled automatically;
-    /// out of scope for this version.
-    ///
-    /// KNOWN GAP: reference cycles (e.g. an array pushing a JSValue that
-    /// refers back to itself) never reach refcount zero and leak by design —
-    /// there is no cycle collector in this version.
     pub fn deinit(self: JSValue) void {
         var pending: PendingRelease = .{};
         self.releaseInto(&pending);
         pending.drain();
     }
 
-    /// Container boxes whose refcount just reached zero but whose children
-    /// have not been released yet: one intrusive singly-linked list per
-    /// container type. The link lives in the box's own `_count` field, which
-    /// is dead once it reaches zero (nothing reads it again before
-    /// `destroy()`), so queueing a box needs no memory at all -- and each
-    /// list being homogeneous means no type tag has to be stored alongside
-    /// the link. The list heads are the only state, and they live on the
-    /// stack of `deinit()`.
-    ///
-    /// Only types that can nest arbitrarily deep are queued. Leaves (no
-    /// nested JSValues) are torn down on the spot, and views (`data_view`,
-    /// `typed_array`) release their single owner into the lists and are torn
-    /// down on the spot too.
     const PendingRelease = struct {
         array: ?*Rc(ZArray(JSValue)) = null,
         object: ?*Rc(ZObject(JSValue)) = null,
@@ -481,28 +684,19 @@ pub const JSValue = union(enum) {
         promise: ?*Rc(ZPromise(JSValue)) = null,
         proxy: ?*Rc(Proxy) = null,
 
-        fn push(self: *PendingRelease, comptime tag: []const u8, box: @typeInfo(@FieldType(PendingRelease, tag)).optional.child) void {
+        fn push(self: *PendingRelease, comptime t: []const u8, box: @typeInfo(@FieldType(PendingRelease, t)).optional.child) void {
             std.debug.assert(box._count == 0);
-            box._count = if (@field(self, tag)) |head| @intFromPtr(head) else 0;
-            @field(self, tag) = box;
+            box._count = if (@field(self, t)) |head| @intFromPtr(head) else 0;
+            @field(self, t) = box;
         }
 
-        fn pop(self: *PendingRelease, comptime tag: []const u8) @FieldType(PendingRelease, tag) {
-            const box = @field(self, tag) orelse return null;
-            @field(self, tag) = if (box._count == 0) null else @ptrFromInt(box._count);
+        fn pop(self: *PendingRelease, comptime t: []const u8) @FieldType(PendingRelease, t) {
+            const box = @field(self, t) orelse return null;
+            @field(self, t) = if (box._count == 0) null else @ptrFromInt(box._count);
             box._count = 0;
             return box;
         }
 
-        /// Tears down every queued box. Releasing a box's children may
-        /// queue more boxes; the loop runs until every list is empty.
-        ///
-        /// The payload types defined in this repo (`Callable`, `Proxy`,
-        /// `DataViewBox`, `TypedArrayBox`) have their own `deinit()` that
-        /// calls `JSValue.deinit()` on their fields; calling it here would
-        /// start a nested release per level and bring the recursion back.
-        /// Their JSValue fields are released into the lists by hand
-        /// instead -- keep these arms in sync with those `deinit()`s.
         fn drain(self: *PendingRelease) void {
             while (true) {
                 if (self.pop("array")) |box| {
@@ -518,8 +712,6 @@ pub const JSValue = union(enum) {
                     box.value.deinit();
                     box.destroy();
                 } else if (self.pop("map")) |box| {
-                    // Unlike ZObject (String-keyed), Map keys are arbitrary
-                    // JSValues too — both sides need releasing.
                     for (box.value.keys()) |key| key.releaseInto(self);
                     for (box.value.values()) |value| value.releaseInto(self);
                     box.value.deinit();
@@ -529,21 +721,16 @@ pub const JSValue = union(enum) {
                     box.value.deinit();
                     box.destroy();
                 } else if (self.pop("error")) |box| {
-                    // AggregateError's errors slice holds JSValues too (only
-                    // non-null for .aggregate_error).
                     if (box.value.errors) |errs| {
                         for (errs) |e| e.releaseInto(self);
                     }
                     box.value.deinit();
                     box.destroy();
                 } else if (self.pop("function")) |box| {
-                    // Same fields Callable.deinit() releases.
                     if (box.value.prototype) |p| p.releaseInto(self);
                     if (box.value.statics) |st| st.releaseInto(self);
                     box.destroy();
                 } else if (self.pop("promise")) |box| {
-                    // The settled result and every handler/derived in
-                    // still-pending reactions are JSValues this box owns.
                     if (box.value.result) |r| r.releaseInto(self);
                     for (box.value.reactions.items) |reaction| {
                         if (reaction.on_fulfilled) |h| h.releaseInto(self);
@@ -553,7 +740,6 @@ pub const JSValue = union(enum) {
                     box.value.deinit(box.allocator);
                     box.destroy();
                 } else if (self.pop("proxy")) |box| {
-                    // Same fields Proxy.deinit() releases.
                     box.value.target.releaseInto(self);
                     box.value.handler.releaseInto(self);
                     box.destroy();
@@ -562,68 +748,105 @@ pub const JSValue = union(enum) {
         }
     };
 
-    /// Drops one reference. A box that reaches zero is either torn down on
-    /// the spot (leaves and views: bounded work, no recursion beyond one
-    /// view -> owner step) or queued on `pending` (containers).
     fn releaseInto(self: JSValue, pending: *PendingRelease) void {
-        switch (self) {
-            .undefined, .null, .boolean, .number => {},
-            // Leaves that own heap storage of their own.
-            inline .string, .regex, .symbol, .bigint, .array_buffer => |box| {
+        if (!self.needsDeinit()) return;
+        switch (self.tag()) {
+            .number, .undefined, .null, .boolean => {},
+            .string => {
+                const box = self.asString();
                 if (box.decref()) {
                     box.value.deinit();
                     box.destroy();
                 }
             },
-            // Pure values (ZDate, every z-temporal type) -- only the box
-            // itself needs freeing.
-            inline .date, .temporal => |box| {
+            .regex => {
+                const box = self.asRegex();
+                if (box.decref()) {
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            .symbol => {
+                const box = self.asSymbol();
+                if (box.decref()) {
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            .bigint => {
+                const box = self.asBigInt();
+                if (box.decref()) {
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            .array_buffer => {
+                const box = self.asArrayBuffer();
+                if (box.decref()) {
+                    box.value.deinit();
+                    box.destroy();
+                }
+            },
+            .date => {
+                const box = self.asDate();
                 if (box.decref()) box.destroy();
             },
-            // Views own no bytes of their own, only their `.array_buffer`
-            // owner (same field DataViewBox/TypedArrayBox.deinit() release).
-            inline .data_view, .typed_array => |box| {
+            .temporal => {
+                const box = self.asTemporal();
+                if (box.decref()) box.destroy();
+            },
+            .data_view => {
+                const box = self.asDataView();
                 if (box.decref()) {
                     box.value.owner.releaseInto(pending);
                     box.destroy();
                 }
             },
-            inline .array, .object, .map, .set, .@"error", .function, .promise, .proxy => |box, tag| {
-                if (box.decref()) pending.push(@tagName(tag), box);
+            .typed_array => {
+                const box = self.asTypedArray();
+                if (box.decref()) {
+                    box.value.owner.releaseInto(pending);
+                    box.destroy();
+                }
+            },
+            .array => {
+                const box = self.asArray();
+                if (box.decref()) pending.push("array", box);
+            },
+            .object => {
+                const box = self.asObject();
+                if (box.decref()) pending.push("object", box);
+            },
+            .map => {
+                const box = self.asMap();
+                if (box.decref()) pending.push("map", box);
+            },
+            .set => {
+                const box = self.asSet();
+                if (box.decref()) pending.push("set", box);
+            },
+            .@"error" => {
+                const box = self.asError();
+                if (box.decref()) pending.push("error", box);
+            },
+            .function => {
+                const box = self.asFunction();
+                if (box.decref()) pending.push("function", box);
+            },
+            .promise => {
+                const box = self.asPromise();
+                if (box.decref()) pending.push("promise", box);
+            },
+            .proxy => {
+                const box = self.asProxy();
+                if (box.decref()) pending.push("proxy", box);
             },
         }
     }
 
-    // ---- Rc-aware mutation ------------------------------------------------
-    //
-    // z-object/z-map/z-set store and drop values by plain copy: generic over
-    // T, they never release a value they overwrite or remove. These wrappers
-    // do it for JSValue containers. Same contract as the constructors: every
-    // JSValue handed in is consumed, also when the call fails. A value being
-    // replaced is released only AFTER the new one is stored, so replacing a
-    // value with the same box (`o.x = o.x`) never drops its count to zero
-    // midway. Each requires the matching variant (see `requireTag`).
-    //
-    // Two ownership conventions coexist, so do not mix them up:
-    //   - constructors (`new*`) and these wrappers CONSUME every JSValue
-    //     handed in, also on error: never `errdefer v.deinit()` around them.
-    //   - the raw payload APIs (`ZObject.set`/`defineProperty`, `ZMap.set`,
-    //     `ZSet.add`, `ZArray` mutators, reached through `box.value`) do NOT
-    //     consume on error: the caller still owns the value and must
-    //     release it. On success they store it without releasing anything
-    //     they overwrite or remove.
-
-    /// `self[key] = value`, releasing whatever the property held before
-    /// (its value, or its getter/setter if it was an accessor -- a plain set
-    /// replaces an accessor with a data property). On error (frozen,
-    /// non-writable, non-extensible, out of memory) `value` is released and
-    /// the property is unchanged. `o.x = o.x` is safe: the old value is
-    /// released only after the new one is stored. Raw counterpart:
-    /// `ZObject.set`, which keeps `value` with the caller on error and never
-    /// releases the value it overwrites.
     pub fn objectSet(self: JSValue, key: []const u8, value: JSValue) ZObjectError!void {
         self.requireTag(.object, "objectSet: expected .object");
-        const obj = &self.object.value;
+        const obj = &self.asObject().value;
         const old = OwnSlots.read(obj, key);
         obj.set(key, value) catch |err| {
             value.deinit();
@@ -632,23 +855,14 @@ pub const JSValue = union(enum) {
         old.release();
     }
 
-    /// Defines `key` as a data property with `descriptor`, releasing what it
-    /// held before. If it was an accessor, its getter/setter slots are
-    /// cleared (it becomes a data property, as in JS) and released. On error
-    /// `value` is released and the property is unchanged. Redefining with
-    /// the same box is safe (old slots are released last). Raw counterpart:
-    /// `ZObject.defineProperty`, which keeps `value` with the caller on
-    /// error and releases nothing.
     pub fn objectDefine(self: JSValue, key: []const u8, value: JSValue, descriptor: PropertyDescriptor) ZObjectError!void {
         self.requireTag(.object, "objectDefine: expected .object");
-        const obj = &self.object.value;
+        const obj = &self.asObject().value;
         const old = OwnSlots.read(obj, key);
         obj.defineProperty(key, value, descriptor) catch |err| {
             value.deinit();
             return err;
         };
-        // defineProperty leaves the accessor slots in place; drop them
-        // before releasing what they pointed to.
         if (obj.getOwnRecordMut(key)) |rec| {
             rec.getter = null;
             rec.setter = null;
@@ -656,29 +870,18 @@ pub const JSValue = union(enum) {
         old.release();
     }
 
-    /// Removes own property `key` and releases its value (and getter/
-    /// setter). Returns false if it wasn't there. On error (frozen,
-    /// non-configurable) nothing is removed or released. Consumes no
-    /// JSValue (the key is a plain string). Raw counterpart:
-    /// `ZObject.delete`, which removes the slot without releasing it.
     pub fn objectDelete(self: JSValue, key: []const u8) ZObjectError!bool {
         self.requireTag(.object, "objectDelete: expected .object");
-        const obj = &self.object.value;
+        const obj = &self.asObject().value;
         const old = OwnSlots.read(obj, key);
         const removed = try obj.delete(key);
         if (removed) old.release();
         return removed;
     }
 
-    /// Removes every own property and releases what they held. Fails --
-    /// releasing nothing -- under the same conditions as `ZObject.clear`
-    /// (a frozen object, or any non-configurable property), which are
-    /// checked first so values are never released for a clear that is then
-    /// refused. Consumes no JSValue. Raw counterpart: `ZObject.clear`,
-    /// which drops the slots without releasing them.
     pub fn objectClear(self: JSValue) ZObjectError!void {
         self.requireTag(.object, "objectClear: expected .object");
-        const obj = &self.object.value;
+        const obj = &self.asObject().value;
         if (obj.is_frozen) return error.ObjectIsFrozen;
         for (obj.properties.values()) |prop| {
             if (!prop.descriptor.configurable) return error.PropertyNotConfigurable;
@@ -691,8 +894,6 @@ pub const JSValue = union(enum) {
         obj.clear() catch |err| std.debug.panic("objectClear: ZObject.clear refused after its preconditions passed: {s}", .{@errorName(err)});
     }
 
-    /// The JSValues one own property slot holds, copied out before a
-    /// mutation so they can be released once it has succeeded.
     const OwnSlots = struct {
         value: ?JSValue = null,
         getter: ?JSValue = null,
@@ -710,17 +911,9 @@ pub const JSValue = union(enum) {
         }
     };
 
-    /// `self.set(key, value)` with Map semantics: an existing key keeps its
-    /// position and its STORED key box; the old value and the incoming
-    /// (now redundant) key are released after the new value is stored. On
-    /// error both `key` and `value` are released and the map is unchanged.
-    /// Passing the stored key box or the stored value box again is safe
-    /// (the caller retained it). Raw counterpart: `ZMap.set`, which keeps
-    /// `key`/`value` with the caller on error and never releases the old
-    /// value or the redundant key.
     pub fn mapSet(self: JSValue, key: JSValue, value: JSValue) ZValueError!void {
         self.requireTag(.map, "mapSet: expected .map");
-        const m = &self.map.value;
+        const m = &self.asMap().value;
         const old_value = m.get(key);
         m.set(key, value) catch |err| {
             key.deinit();
@@ -733,38 +926,25 @@ pub const JSValue = union(enum) {
         }
     }
 
-    /// Removes `key` and releases the STORED key and its value (the stored
-    /// key may be a different, equal box than `key`, e.g. two "k" strings).
-    /// `key` itself is only looked up, not consumed -- also when it is the
-    /// stored box. Returns false if the key wasn't there. Raw counterpart:
-    /// `ZMap.delete`, which removes the entry without releasing it.
     pub fn mapDelete(self: JSValue, key: JSValue) bool {
         self.requireTag(.map, "mapDelete: expected .map");
-        const entry = self.map.value.fetchDelete(key) orelse return false;
+        const entry = self.asMap().value.fetchDelete(key) orelse return false;
         entry.key.deinit();
         entry.value.deinit();
         return true;
     }
 
-    /// Removes every entry and releases every key and value. Consumes no
-    /// JSValue. Raw counterpart: `ZMap.clear`, which releases nothing.
     pub fn mapClear(self: JSValue) void {
         self.requireTag(.map, "mapClear: expected .map");
-        const m = &self.map.value;
+        const m = &self.asMap().value;
         for (m.keys()) |key| key.deinit();
         for (m.values()) |value| value.deinit();
         m.clear();
     }
 
-    /// Adds `value` unless an equal value is already present, in which case
-    /// `value` is released (the stored one stays) -- so adding the stored
-    /// box again just drops the caller's reference. On error `value` is
-    /// released and the set is unchanged. Raw counterpart: `ZSet.add`,
-    /// which keeps `value` with the caller on error and never releases a
-    /// duplicate.
     pub fn setAdd(self: JSValue, value: JSValue) ZValueError!void {
         self.requireTag(.set, "setAdd: expected .set");
-        const st = &self.set.value;
+        const st = &self.asSet().value;
         if (st.has(value)) {
             value.deinit();
             return;
@@ -775,62 +955,34 @@ pub const JSValue = union(enum) {
         };
     }
 
-    /// Removes `value` and releases the STORED element (possibly a
-    /// different, equal box). `value` itself is only looked up, not
-    /// consumed -- also when it is the stored box. Returns false if it
-    /// wasn't there. Raw counterpart: `ZSet.delete`, which removes the
-    /// element without releasing it.
     pub fn setDelete(self: JSValue, value: JSValue) bool {
         self.requireTag(.set, "setDelete: expected .set");
-        // ZSet is a ZMap(T, void) underneath; its fetchDelete hands back
-        // the stored element.
-        const entry = self.set.value.map.fetchDelete(value) orelse return false;
+        const entry = self.asSet().value.map.fetchDelete(value) orelse return false;
         entry.key.deinit();
         return true;
     }
 
-    /// Removes every element and releases it. Consumes no JSValue. Raw
-    /// counterpart: `ZSet.clear`, which releases nothing.
     pub fn setClear(self: JSValue) void {
         self.requireTag(.set, "setClear: expected .set");
-        const st = &self.set.value;
+        const st = &self.asSet().value;
         for (st.values()) |value| value.deinit();
         st.clear();
     }
 
-    /// Rc-aware duplicate of a `.array` JSValue: unlike `ZArray(JSValue).clone()`
-    /// (a shallow byte-copy that does NOT retain its elements — never call it
-    /// directly on `T = JSValue`), this retains every child element so the
-    /// two arrays can each be independently deinit()'d without double-freeing
-    /// shared children.
-    ///
-    /// Precondition: `self` must be `.array`. If it is not, the process
-    /// aborts with a clear message, in every build mode.
     pub fn cloneArray(self: JSValue) ZValueError!JSValue {
         self.requireTag(.array, "cloneArray: expected .array");
-        const box = self.array;
+        const box = self.asArray();
         var new_arr = try box.value.clone();
         errdefer new_arr.deinit();
         const new_box = try Rc(ZArray(JSValue)).create(box.allocator, new_arr);
-        // Retain only once nothing below can fail: an earlier retain would
-        // leave every child over-counted if the box allocation failed.
         for (new_box.value.toSliceMut()) |*child| _ = child.retain();
-        return .{ .array = new_box };
+        return fromArray(new_box);
     }
 
-    /// Rc-aware duplicate of a `.object` JSValue: retains every property
-    /// value, analogous to cloneArray(). Does NOT copy the prototype pointer
-    /// (see the KNOWN GAP note on deinit()) beyond whatever raw pointer copy
-    /// ZObject's own property storage performs.
-    ///
-    /// Precondition: `self` must be `.object`. If it is not, the process
-    /// aborts with a clear message, in every build mode.
     pub fn cloneObject(self: JSValue) !JSValue {
         self.requireTag(.object, "cloneObject: expected .object");
-        const box = self.object;
+        const box = self.asObject();
         var new_obj = ZObject(JSValue).init(box.allocator);
-        // On failure, release every value already copied (each was retained
-        // right after its own successful set()) before freeing the object.
         errdefer {
             for (new_obj.properties.values()) |prop| prop.value.deinit();
             new_obj.deinit();
@@ -844,23 +996,13 @@ pub const JSValue = union(enum) {
             _ = value.retain();
         }
 
-        return .{ .object = try Rc(ZObject(JSValue)).create(box.allocator, new_obj) };
+        return fromObject(try Rc(ZObject(JSValue)).create(box.allocator, new_obj));
     }
 
-    /// Rc-aware duplicate of a `.map` JSValue: retains every key AND every
-    /// value (Map keys are JSValues too, unlike ZObject's plain-string
-    /// keys), analogous to cloneArray()/cloneObject(). ZMap has no
-    /// clone()/shallow-copy method to accidentally misuse directly, unlike
-    /// ZArray/ZObject — but this still keeps the same Rc-aware-duplicate
-    /// naming convention for consistency.
-    ///
-    /// Precondition: `self` must be `.map`. If it is not, the process
-    /// aborts with a clear message, in every build mode.
     pub fn cloneMap(self: JSValue) ZValueError!JSValue {
         self.requireTag(.map, "cloneMap: expected .map");
-        const box = self.map;
+        const box = self.asMap();
         var new_map = ZMap(JSValue, JSValue).init(box.allocator);
-        // Same shape as cloneObject(): release what was already copied.
         errdefer {
             for (new_map.keys()) |key| key.deinit();
             for (new_map.values()) |value| value.deinit();
@@ -875,18 +1017,13 @@ pub const JSValue = union(enum) {
             _ = pair.value.retain();
         }
 
-        return .{ .map = try Rc(ZMap(JSValue, JSValue)).create(box.allocator, new_map) };
+        return fromMap(try Rc(ZMap(JSValue, JSValue)).create(box.allocator, new_map));
     }
 
-    /// Rc-aware duplicate of a `.set` JSValue: retains every value.
-    ///
-    /// Precondition: `self` must be `.set`. If it is not, the process
-    /// aborts with a clear message, in every build mode.
     pub fn cloneSet(self: JSValue) ZValueError!JSValue {
         self.requireTag(.set, "cloneSet: expected .set");
-        const box = self.set;
+        const box = self.asSet();
         var new_set = ZSet(JSValue).init(box.allocator);
-        // Same shape as cloneObject(): release what was already copied.
         errdefer {
             for (new_set.values()) |value| value.deinit();
             new_set.deinit();
@@ -897,29 +1034,21 @@ pub const JSValue = union(enum) {
             _ = value.retain();
         }
 
-        return .{ .set = try Rc(ZSet(JSValue)).create(box.allocator, new_set) };
+        return fromSet(try Rc(ZSet(JSValue)).create(box.allocator, new_set));
     }
 
-    /// Rc-aware duplicate of a `.error` JSValue: for AggregateError, retains
-    /// every JSValue in `errors` (analogous to cloneArray()/cloneSet()) —
-    /// ZError(JSValue).initAggregate() only byte-copies the slice it's given,
-    /// it does not retain on its own.
-    ///
-    /// Precondition: `self` must be `.error`. If it is not, the process
-    /// aborts with a clear message, in every build mode.
     pub fn cloneError(self: JSValue) ZValueError!JSValue {
         self.requireTag(.@"error", "cloneError: expected .error");
-        const box = self.@"error";
+        const box = self.asError();
         var new_err = if (box.value.errors) |errs|
             try ZError(JSValue).initAggregate(box.allocator, box.value.message, errs)
         else
             try ZError(JSValue).init(box.allocator, box.value.kind, box.value.message);
         errdefer new_err.deinit();
         const new_box = try Rc(ZError(JSValue)).create(box.allocator, new_err);
-        // Retain only once nothing below can fail (same as cloneArray()).
         if (new_box.value.errors) |errs| {
             for (errs) |e| _ = e.retain();
         }
-        return .{ .@"error" = new_box };
+        return fromError(new_box);
     }
 };

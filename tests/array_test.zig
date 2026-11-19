@@ -5,8 +5,8 @@ const FailingAllocator = std.testing.FailingAllocator;
 
 test "array: push value types, deinit frees the array" {
     var arr = try JSValue.newArray(testing.allocator);
-    try arr.array.value.items.append(testing.allocator, JSValue.fromNumber(1.0));
-    try arr.array.value.items.append(testing.allocator, JSValue.fromBool(true));
+    try arr.asArray().value.items.append(testing.allocator, JSValue.fromNumber(1.0));
+    try arr.asArray().value.items.append(testing.allocator, JSValue.fromBool(true));
     arr.deinit();
 }
 
@@ -14,17 +14,17 @@ test "array: shared child array is released once per retain, not once per contai
     var inner = try JSValue.newArray(testing.allocator);
     // one external reference kept by the test, plus two pushes into outer
     // (each push must retain, since inner is used again after each push).
-    try inner.array.value.items.append(testing.allocator, JSValue.fromNumber(99.0));
+    try inner.asArray().value.items.append(testing.allocator, JSValue.fromNumber(99.0));
 
     var outer = try JSValue.newArray(testing.allocator);
-    try outer.array.value.items.append(testing.allocator, inner.retain());
-    try outer.array.value.items.append(testing.allocator, inner.retain());
+    try outer.asArray().value.items.append(testing.allocator, inner.retain());
+    try outer.asArray().value.items.append(testing.allocator, inner.retain());
 
     // count: 1 (test's own `inner`) + 2 (two retained pushes) = 3
-    try testing.expectEqual(@as(usize, 3), inner.array.refCount());
+    try testing.expectEqual(@as(usize, 3), inner.asArray().refCount());
 
     outer.deinit(); // releases both pushed references: count 3 -> 1
-    try testing.expectEqual(@as(usize, 1), inner.array.refCount());
+    try testing.expectEqual(@as(usize, 1), inner.asArray().refCount());
 
     inner.deinit(); // the test's own reference: count 1 -> 0, actually freed
 }
@@ -32,7 +32,7 @@ test "array: shared child array is released once per retain, not once per contai
 test "array: nested string children are released recursively" {
     var arr = try JSValue.newArray(testing.allocator);
     const s = try JSValue.newString(testing.allocator, "nested");
-    try arr.array.value.items.append(testing.allocator, s);
+    try arr.asArray().value.items.append(testing.allocator, s);
     // arr now owns the only reference to s; arr.deinit() must release it too,
     // or std.testing.allocator's leak detector catches it.
     arr.deinit();
@@ -41,30 +41,30 @@ test "array: nested string children are released recursively" {
 test "cloneArray retains every child (regression: ZArray.clone() alone would not)" {
     var original = try JSValue.newArray(testing.allocator);
     const child = try JSValue.newString(testing.allocator, "shared");
-    try original.array.value.items.append(testing.allocator, child);
+    try original.asArray().value.items.append(testing.allocator, child);
     // original now holds the only reference; child.refCount() == 1.
-    try testing.expectEqual(@as(usize, 1), child.string.refCount());
+    try testing.expectEqual(@as(usize, 1), child.asString().refCount());
 
     var copy = try original.cloneArray();
 
     // cloneArray must have retained the shared child, so its count is now 2.
-    try testing.expectEqual(@as(usize, 2), child.string.refCount());
+    try testing.expectEqual(@as(usize, 2), child.asString().refCount());
 
     original.deinit();
-    try testing.expectEqual(@as(usize, 1), child.string.refCount()); // still alive via copy
+    try testing.expectEqual(@as(usize, 1), child.asString().refCount()); // still alive via copy
 
     copy.deinit(); // drops the last reference, frees child
 }
 
 test "reference cycle leaks by design (documented, not a bug to fix here)" {
     var a = try JSValue.newArray(testing.allocator);
-    try a.array.value.items.append(testing.allocator, a.retain()); // a contains itself
-    try testing.expectEqual(@as(usize, 2), a.array.refCount());
+    try a.asArray().value.items.append(testing.allocator, a.retain()); // a contains itself
+    try testing.expectEqual(@as(usize, 2), a.asArray().refCount());
 
     // Break the cycle manually so this test doesn't actually leak under
     // std.testing.allocator's leak detector: pop the self-reference back out
     // and release it before releasing the original handle.
-    const self_ref = a.array.value.pop().?;
+    const self_ref = a.asArray().value.pop().?;
     self_ref.deinit();
     a.deinit();
 }
@@ -79,8 +79,8 @@ test "cloneArray: OOM leaks nothing and leaves the source intact" {
         var fa = FailingAllocator.init(testing.allocator, .{});
         const a = fa.allocator();
         const src = try JSValue.newArray(a);
-        _ = try src.array.value.push(try JSValue.newString(a, "x"));
-        _ = try src.array.value.push(try JSValue.newString(a, "y"));
+        _ = try src.asArray().value.push(try JSValue.newString(a, "x"));
+        _ = try src.asArray().value.push(try JSValue.newString(a, "y"));
         fa.fail_index = fa.alloc_index + k;
         const c = src.cloneArray() catch |err| {
             try testing.expectEqual(error.OutOfMemory, err);
@@ -102,7 +102,7 @@ test "array: releasing a 100 000-deep nested array does not overflow the stack" 
     var cur = JSValue.NULL;
     for (0..100_000) |_| {
         const outer = try JSValue.newArray(testing.allocator);
-        _ = try outer.array.value.push(cur);
+        _ = try outer.asArray().value.push(cur);
         cur = outer;
     }
     cur.deinit();

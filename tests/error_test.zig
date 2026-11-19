@@ -19,7 +19,7 @@ test "error: each ErrorKind round-trips through toString via the wrapper" {
         var err = try JSValue.newError(testing.allocator, kind, "x");
         defer err.deinit();
 
-        const s = try err.@"error".value.toString(testing.allocator);
+        const s = try err.asError().value.toString(testing.allocator);
         defer testing.allocator.free(s);
 
         var expected_buf: [64]u8 = undefined;
@@ -31,10 +31,10 @@ test "error: each ErrorKind round-trips through toString via the wrapper" {
 test "error: shared box is released once per retain" {
     var err = try JSValue.newError(testing.allocator, .range_error, "shared");
     _ = err.retain();
-    try testing.expectEqual(@as(usize, 2), err.@"error".refCount());
+    try testing.expectEqual(@as(usize, 2), err.asError().refCount());
 
     err.deinit();
-    try testing.expectEqual(@as(usize, 1), err.@"error".refCount());
+    try testing.expectEqual(@as(usize, 1), err.asError().refCount());
 
     err.deinit();
 }
@@ -50,7 +50,7 @@ test "error: AggregateError releases every nested JSValue recursively" {
 test "error: AggregateError with no errors has null errors slice" {
     var err = try JSValue.newError(testing.allocator, .generic, "plain");
     defer err.deinit();
-    try testing.expect(err.@"error".value.errors == null);
+    try testing.expect(err.asError().value.errors == null);
 }
 
 test "cloneError duplicates a plain error independently" {
@@ -59,7 +59,7 @@ test "cloneError duplicates a plain error independently" {
 
     original.deinit();
 
-    const s = try copy.@"error".value.toString(testing.allocator);
+    const s = try copy.asError().value.toString(testing.allocator);
     defer testing.allocator.free(s);
     try testing.expectEqualStrings("SyntaxError: oops", s);
 
@@ -69,13 +69,13 @@ test "cloneError duplicates a plain error independently" {
 test "cloneError retains every nested value of an AggregateError" {
     const child = try JSValue.newString(testing.allocator, "shared");
     var original = try JSValue.newAggregateError(testing.allocator, "batch", &.{child});
-    try testing.expectEqual(@as(usize, 1), child.string.refCount());
+    try testing.expectEqual(@as(usize, 1), child.asString().refCount());
 
     var copy = try original.cloneError();
-    try testing.expectEqual(@as(usize, 2), child.string.refCount());
+    try testing.expectEqual(@as(usize, 2), child.asString().refCount());
 
     original.deinit();
-    try testing.expectEqual(@as(usize, 1), child.string.refCount());
+    try testing.expectEqual(@as(usize, 1), child.asString().refCount());
 
     copy.deinit();
 }

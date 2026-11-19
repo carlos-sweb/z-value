@@ -9,17 +9,17 @@ test "newTemporal wraps a PlainDate, typeof is \"object\"" {
     const v = try JSValue.newTemporal(testing.allocator, .{ .plain_date = pd });
     defer v.deinit();
     try testing.expectEqualStrings("object", v.typeOf());
-    try testing.expectEqual(@as(i32, 2024), v.temporal.value.plain_date.year());
+    try testing.expectEqual(@as(i32, 2024), v.asTemporal().value.plain_date.year());
 }
 
 test "temporal value: retain twice, deinit twice, no leak" {
     const inst = try ztemporal.Instant.fromEpochMilliseconds(0);
     const v = try JSValue.newTemporal(testing.allocator, .{ .instant = inst });
     const v2 = v.retain();
-    try testing.expect(v.temporal == v2.temporal);
-    try testing.expectEqual(@as(usize, 2), v.temporal.refCount());
+    try testing.expect(v.asTemporal() == v2.asTemporal());
+    try testing.expectEqual(@as(usize, 2), v.asTemporal().refCount());
     v.deinit();
-    try testing.expectEqual(@as(usize, 1), v2.temporal.refCount());
+    try testing.expectEqual(@as(usize, 1), v2.asTemporal().refCount());
     v2.deinit();
 }
 
@@ -33,7 +33,7 @@ test "two Temporal instances with the same value are never strictly equal (ident
     try testing.expect(!zvalue.equality.strictEquals(a, b));
     try testing.expect(zvalue.equality.strictEquals(a, a));
     // Value equality goes through the wrapped type's own .equals(), not ===.
-    try testing.expect(ztemporal.PlainDate.equals(a.temporal.value.plain_date, b.temporal.value.plain_date));
+    try testing.expect(ztemporal.PlainDate.equals(a.asTemporal().value.plain_date, b.asTemporal().value.plain_date));
 }
 
 test "kindName distinguishes all 8 wrapped types" {

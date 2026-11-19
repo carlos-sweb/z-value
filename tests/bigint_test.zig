@@ -13,10 +13,10 @@ test "newBigInt parses digit text, typeof is \"bigint\" (its own arm, not folded
 test "bigint value: retain twice, deinit twice, no leak" {
     const v = try JSValue.newBigInt(testing.allocator, "42");
     const v2 = v.retain();
-    try testing.expect(v.bigint == v2.bigint);
-    try testing.expectEqual(@as(usize, 2), v.bigint.refCount());
+    try testing.expect(v.asBigInt() == v2.asBigInt());
+    try testing.expectEqual(@as(usize, 2), v.asBigInt().refCount());
     v.deinit();
-    try testing.expectEqual(@as(usize, 1), v2.bigint.refCount());
+    try testing.expectEqual(@as(usize, 1), v2.asBigInt().refCount());
     v2.deinit();
 }
 
@@ -103,7 +103,7 @@ test "newBigIntFromValue: OOM releases the handed-over ZBigInt" {
         var fa = FailingAllocator.init(testing.allocator, .{});
         const a = fa.allocator();
         const parsed = try JSValue.newBigInt(a, "-98765432109876543210");
-        const sum = try zvalue.ZBigInt.add(a, parsed.bigint.value, parsed.bigint.value);
+        const sum = try zvalue.ZBigInt.add(a, parsed.asBigInt().value, parsed.asBigInt().value);
         parsed.deinit();
         fa.fail_index = fa.alloc_index + k;
         const v = JSValue.newBigIntFromValue(a, sum) catch |err| {

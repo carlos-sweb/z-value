@@ -5,14 +5,14 @@ const FailingAllocator = std.testing.FailingAllocator;
 
 test "set: add value types, deinit frees the set" {
     var set = try JSValue.newSet(testing.allocator);
-    try set.set.value.add(JSValue.fromNumber(1.0));
+    try set.asSet().value.add(JSValue.fromNumber(1.0));
     set.deinit();
 }
 
 test "set: nested string values are released recursively" {
     var set = try JSValue.newSet(testing.allocator);
     const s = try JSValue.newString(testing.allocator, "nested");
-    try set.set.value.add(s);
+    try set.asSet().value.add(s);
     set.deinit(); // must release `s` too, or the leak detector catches it.
 }
 
@@ -20,12 +20,12 @@ test "set: shared value is released once per retain" {
     var inner = try JSValue.newArray(testing.allocator);
 
     var outer = try JSValue.newSet(testing.allocator);
-    try outer.set.value.add(inner.retain());
+    try outer.asSet().value.add(inner.retain());
 
-    try testing.expectEqual(@as(usize, 2), inner.array.refCount()); // test's own + 1 retained add
+    try testing.expectEqual(@as(usize, 2), inner.asArray().refCount()); // test's own + 1 retained add
 
     outer.deinit();
-    try testing.expectEqual(@as(usize, 1), inner.array.refCount());
+    try testing.expectEqual(@as(usize, 1), inner.asArray().refCount());
 
     inner.deinit();
 }
@@ -33,14 +33,14 @@ test "set: shared value is released once per retain" {
 test "cloneSet retains every value" {
     var original = try JSValue.newSet(testing.allocator);
     const child = try JSValue.newString(testing.allocator, "shared");
-    try original.set.value.add(child);
-    try testing.expectEqual(@as(usize, 1), child.string.refCount());
+    try original.asSet().value.add(child);
+    try testing.expectEqual(@as(usize, 1), child.asString().refCount());
 
     var copy = try original.cloneSet();
-    try testing.expectEqual(@as(usize, 2), child.string.refCount());
+    try testing.expectEqual(@as(usize, 2), child.asString().refCount());
 
     original.deinit();
-    try testing.expectEqual(@as(usize, 1), child.string.refCount());
+    try testing.expectEqual(@as(usize, 1), child.asString().refCount());
 
     copy.deinit();
 }
@@ -49,9 +49,9 @@ test "set: JSValue values use SameValueZero (adding NaN twice is a no-op)" {
     var set = try JSValue.newSet(testing.allocator);
     defer set.deinit();
 
-    try set.set.value.add(JSValue.fromNumber(std.math.nan(f64)));
-    try set.set.value.add(JSValue.fromNumber(std.math.nan(f64)));
-    try testing.expectEqual(@as(usize, 1), set.set.value.size());
+    try set.asSet().value.add(JSValue.fromNumber(std.math.nan(f64)));
+    try set.asSet().value.add(JSValue.fromNumber(std.math.nan(f64)));
+    try testing.expectEqual(@as(usize, 1), set.asSet().value.size());
 }
 
 test "typeof a set is \"object\"" {
@@ -70,11 +70,11 @@ test "cloneSet: OOM mid-copy leaks nothing and leaves the source intact" {
         var fa = FailingAllocator.init(testing.allocator, .{});
         const a = fa.allocator();
         const src = try JSValue.newSet(a);
-        try src.set.value.add(try JSValue.newString(a, "a"));
-        try src.set.value.add(try JSValue.newString(a, "b"));
-        try src.set.value.add(try JSValue.newString(a, "c"));
-        try src.set.value.add(try JSValue.newString(a, "d"));
-        try src.set.value.add(try JSValue.newString(a, "e"));
+        try src.asSet().value.add(try JSValue.newString(a, "a"));
+        try src.asSet().value.add(try JSValue.newString(a, "b"));
+        try src.asSet().value.add(try JSValue.newString(a, "c"));
+        try src.asSet().value.add(try JSValue.newString(a, "d"));
+        try src.asSet().value.add(try JSValue.newString(a, "e"));
         fa.fail_index = fa.alloc_index + k;
         const c = src.cloneSet() catch |err| {
             try testing.expectEqual(error.OutOfMemory, err);
@@ -94,7 +94,7 @@ test "set: releasing a 100 000-deep nested set does not overflow the stack" {
     var cur = JSValue.NULL;
     for (0..100_000) |_| {
         const outer = try JSValue.newSet(testing.allocator);
-        try outer.set.value.add(cur);
+        try outer.asSet().value.add(cur);
         cur = outer;
     }
     cur.deinit();
@@ -107,10 +107,10 @@ test "setAdd: a new value is stored; an equal value in another box is released" 
     const a = fa.allocator();
     const s = try JSValue.newSet(a);
     try s.setAdd(try JSValue.newString(a, "x"));
-    const stored = s.set.value.values()[0];
+    const stored = s.asSet().value.values()[0];
     try s.setAdd(try JSValue.newString(a, "x")); // equal, different box: released
-    try testing.expectEqual(@as(usize, 1), s.set.value.size());
-    try testing.expect(s.set.value.values()[0].string == stored.string);
+    try testing.expectEqual(@as(usize, 1), s.asSet().value.size());
+    try testing.expect(s.asSet().value.values()[0].asString() == stored.asString());
     s.deinit();
     try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
 }
@@ -122,8 +122,8 @@ test "setAdd: the same box keeps its count balanced" {
     const v = try JSValue.newString(a, "x");
     try s.setAdd(v);
     try s.setAdd(v.retain());
-    try testing.expectEqual(@as(usize, 1), v.string.refCount());
-    try testing.expectEqual(@as(usize, 1), s.set.value.size());
+    try testing.expectEqual(@as(usize, 1), v.asString().refCount());
+    try testing.expectEqual(@as(usize, 1), s.asSet().value.size());
 }
 
 test "setAdd: out of memory consumes the value, nothing leaks" {
@@ -134,7 +134,7 @@ test "setAdd: out of memory consumes the value, nothing leaks" {
     fa.fail_index = fa.alloc_index;
     try testing.expectError(error.OutOfMemory, s.setAdd(v));
     fa.fail_index = std.math.maxInt(usize);
-    try testing.expectEqual(@as(usize, 0), s.set.value.size());
+    try testing.expectEqual(@as(usize, 0), s.asSet().value.size());
     s.deinit();
     try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
 }
@@ -147,7 +147,7 @@ test "setDelete: releases the STORED element; the lookup value is not consumed" 
     const lookup = try JSValue.newString(a, "x");
     try testing.expect(s.setDelete(lookup));
     try testing.expect(!s.setDelete(lookup));
-    try testing.expectEqual(@as(usize, 1), lookup.string.refCount());
+    try testing.expectEqual(@as(usize, 1), lookup.asString().refCount());
     lookup.deinit();
     s.deinit();
     try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
@@ -161,7 +161,7 @@ test "setClear: releases every element" {
     try s.setAdd(try JSValue.newArray(a));
     try s.setAdd(JSValue.fromNumber(1));
     s.setClear();
-    try testing.expectEqual(@as(usize, 0), s.set.value.size());
+    try testing.expectEqual(@as(usize, 0), s.asSet().value.size());
     s.deinit();
     try testing.expectEqual(fa.allocated_bytes, fa.freed_bytes);
 }
